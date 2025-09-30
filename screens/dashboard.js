@@ -9,13 +9,12 @@ import {
   deleteCampaign, // <= added back for deletion
 } from '../data/campaignsData.js';
 
-import { loadProgressSnapshotFromSupabase, persistFullExportRows } from "../data/campaignProgress.js";
-
 import {
   exportNotCalledCSV,
-  removeProgress,               // clear progress on delete
-  persistFullExportRows,        // <-- store Full CSV rows in Supabase
+  removeProgress,
+  persistFullExportRows,   // <-- keep this one
 } from '../data/campaignProgress.js';
+
 
 import { exportCsvSmart } from '../utils/exportReport.js';
 
