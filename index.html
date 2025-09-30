@@ -16,30 +16,32 @@
       window.__SUPABASE_URL__ = "https://qmhxpugetaksrktyfmji.supabase.co";  // <-- replace with real URL
       window.__SUPABASE_ANON_KEY__ = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtaHhwdWdldGFrc3JrdHlmbWppIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg3NjA0NzYsImV4cCI6MjA3NDMzNjQ3Nn0.-pS4lHZKwxiVh3XL191_IMcZ-JvESva3zo2elTfSDGg";                      // <-- replace with anon key
 
-      // Create a single shared client for the whole app.
-      // We disable auth session persistence to keep the app fully “stateless” on the client.
+      // Create a single shared Supabase client for the whole app.
+      // IMPORTANT: Do NOT short-circuit with "window.supabase ||".
       (function initSupabase() {
         try {
-          if (!window.__SUPABASE_URL__ || !window.__SUPABASE_ANON_KEY__) {
-            console.warn("[ReachPoint] Supabase credentials missing; running in fallback (local only).");
+          const url = window.__SUPABASE_URL__;
+          const key = window.__SUPABASE_ANON_KEY__;
+          if (!url || !key) {
+            console.warn("[ReachPoint] Supabase credentials missing; running in local-only fallback.");
             return;
           }
-          window.supabase = window.supabase || supabase.createClient(
-            window.__SUPABASE_URL__,
-            window.__SUPABASE_ANON_KEY__,
-            {
-              auth: { persistSession: false },
-              global: { headers: { "x-reachpoint-env": "dev" } }
-            }
-          );
-          console.log("[ReachPoint] Supabase client initialized.");
+
+          // Namespace "supabase" is provided by the CDN; we must create a client instance.
+          const client = supabase.createClient(url, key, {
+            auth: { persistSession: false },
+            global: { headers: { "x-reachpoint-env": "dev" } },
+          });
+
+          // Expose client and a capability check
+          window.supabase = client;
+          window.hasSupabase = () => !!(window.supabase && typeof window.supabase.from === "function");
+
+          console.log("[ReachPoint] Supabase client initialized:", window.hasSupabase());
         } catch (e) {
-          console.error("[ReachPoint] Failed to init Supabase, fallback to local only.", e);
+          console.error("[ReachPoint] Failed to init Supabase; local-only fallback.", e);
         }
       })();
-
-      // Small helper for modules to check availability without import cycles
-      window.hasSupabase = () => !!window.supabase;
     </script>
   </head>
 
