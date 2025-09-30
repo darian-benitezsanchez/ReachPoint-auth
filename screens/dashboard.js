@@ -6,15 +6,15 @@ import {
   applyFilters,
   getStudentId,
   getAllStudents,
-  deleteCampaign, // <= added back for deletion
+  deleteCampaign,
 } from '../data/campaignsData.js';
 
 import {
   exportNotCalledCSV,
   removeProgress,
-  persistFullExportRows,   // <-- keep this one
+  persistFullExportRows,
+  loadProgressSnapshotFromSupabase,   // ✅ needed by buildSummaryCSVRows
 } from '../data/campaignProgress.js';
-
 
 import { exportCsvSmart } from '../utils/exportReport.js';
 
@@ -36,7 +36,9 @@ export function Dashboard(root) {
 
   (async () => {
     const campaigns = await listCampaigns();
-    if (!campaigns.length) {
+    const campaignList = Array.isArray(campaigns) ? campaigns : [];
+
+    if (!campaignList.length) {
       page.appendChild(
         div('center',
           el('h1','title','No campaigns yet'),
@@ -51,8 +53,22 @@ export function Dashboard(root) {
     const students = await getAllStudents();
 
     const list = el('div','list');
-    for (const c of campaigns) {
+    for (const c of campaignList) {
       const card = el('section','card');
+
+      // Build queueIds and idToStudent for exports (do this early so we can show the count)
+      const filtered = applyFilters(students, c.filters || []);
+      const queueIds = filtered.map((s,i)=>getStudentId(s,i));
+      const idToStudent = {};
+      filtered.forEach((s,i)=>{ idToStudent[getStudentId(s,i)] = s; });
+
+      // Compute safe created date + student count
+      const created = c.createdAt || c.created_at || null;
+      const createdLabel = created ? new Date(created).toLocaleDateString() : '—';
+      const totalStudents =
+        Array.isArray(c.studentIds) ? c.studentIds.length :
+        Array.isArray(c.student_ids) ? c.student_ids.length :
+        filtered.length;
 
       // Small delete icon in header (NOT an action button)
       const del = button('icon danger', async (e) => {
@@ -71,29 +87,20 @@ export function Dashboard(root) {
       const head = button('card-head', () => location.hash = `#/execute/${c.id}`,
         div('card-head-text',
           div('card-title', c.name),
-          div('card-sub', `Created ${new Date(c.createdAt).toLocaleDateString()} • ${c.studentIds.length} students`),
+          // ✅ safe fallbacks (no .length on undefined)
+          div('card-sub', `Created ${createdLabel} • ${totalStudents} students`),
           div('card-reminders', remindersLabel(c)),
         ),
-        // place delete icon to the right
         div('spacer'),
         del
       );
-
-      // Build queueIds and idToStudent for exports
-      const filtered = applyFilters(students, c.filters || []);
-      const queueIds = filtered.map((s,i)=>getStudentId(s,i));
-      const idToStudent = {};
-      filtered.forEach((s,i)=>{ idToStudent[getStudentId(s,i)] = s; });
 
       // Actions: ONLY TWO BUTTONS
       const actions = div('actions',
         btn('Export Full CSV','btn btn-small', async () => {
           try {
             const { headers, rows } = await buildSummaryCSVRows(c, students);
-
-            // Store a carbon-copy of the JSON rows to Supabase (export_full_rows)
-            await persistFullExportRows(c.id, rows);
-
+            await persistFullExportRows(c.id, rows); // store carbon-copy rows in Supabase
             const csv = csvString(headers, rows);
             await exportCsvSmart(`campaign-${c.id}-full.csv`, csv);
             toast.show('Saved full CSV');
@@ -125,7 +132,7 @@ export function Dashboard(root) {
 /* ---------- helpers ---------- */
 
 function remindersLabel(c) {
-  if (!c.reminders?.length) return 'Reminders: —';
+  if (!c?.reminders?.length) return 'Reminders: —';
   const set = new Set();
   for (const r of c.reminders) for (const d of (r.dates||[])) set.add(d);
   const list = Array.from(set).sort();
@@ -147,37 +154,12 @@ async function buildSummaryCSVRows(campaign, allStudents) {
 
   // CSV headers aligned to Supabase-normalized student columns
   const headers = [
-    'full_name',
-    'camper_email',
-    'camper_high_school_middle_school',
-    'high_school_graduation_year',
-    'birthdate',
-    'mobile_phone',
-    'gpa',
-    'mailing_street_address',
-    'mailing_city',
-    'mailing_state_province',
-    'mailing_zip_postal_code',
-    'camper_status',
-    'parent_guardian_name',
-    'parent_guardian_relation',
-    'parent_guardian_number',
-    'parent_guardian_email',
-    'emergency_contact_name',
-    'emergency_contact_type',
-    'emergency_contact_number',
-    'preferred_language',
-    'major',
-    'college',
-    'jr_snr_wknd',
+    'full_name','camper_email','camper_high_school_middle_school','high_school_graduation_year','birthdate','mobile_phone','gpa',
+    'mailing_street_address','mailing_city','mailing_state_province','mailing_zip_postal_code','camper_status',
+    'parent_guardian_name','parent_guardian_relation','parent_guardian_number','parent_guardian_email',
+    'emergency_contact_name','emergency_contact_type','emergency_contact_number','preferred_language','major','college','jr_snr_wknd',
     // progress fields appended:
-    'outcome',
-    'response',
-    'notes',
-    'timestamp',
-    'student_id',
-    'campaign_id',
-    'campaign_name',
+    'outcome','response','notes','timestamp','student_id','campaign_id','campaign_name',
   ];
 
   const rows = [];
@@ -186,18 +168,14 @@ async function buildSummaryCSVRows(campaign, allStudents) {
     const sid = getStudentId(student, idx);
     const st = idToStudent[sid];
 
-    // Prefer normalized keys; fall back to common legacy variants so older data still works.
     const norm = (k, ...alts) => {
       if (st && st[k] != null && st[k] !== '') return st[k];
       for (const a of alts) if (st && st[a] != null && st[a] !== '') return st[a];
       return '';
     };
 
-    // full_name best-effort resolution
     const fullName =
-      norm('full_name',
-          'fullName','Full Name*','Full Name','name') ||
-      // compose from first/last if present
+      norm('full_name','fullName','Full Name*','Full Name','name') ||
       `${(st?.first_name||'').trim()} ${(st?.last_name||'').trim()}`.trim();
 
     const cp = contacts[sid] || {};
@@ -213,8 +191,7 @@ async function buildSummaryCSVRows(campaign, allStudents) {
     }
     const iso = (tCall || tResp) ? new Date(Math.max(tCall, tResp)).toISOString() : '';
 
-    // Build row with normalized student fields + progress fields
-    const row = {
+    rows.push({
       full_name: fullName,
       camper_email: norm('camper_email','Camper Email*','email','Email'),
       camper_high_school_middle_school: norm('camper_high_school_middle_school','Camper High School/Middle School','school'),
@@ -238,8 +215,6 @@ async function buildSummaryCSVRows(campaign, allStudents) {
       major: norm('major','Major'),
       college: norm('college','College'),
       jr_snr_wknd: norm('jr_snr_wknd','JR-SNR WKND'),
-
-      // progress fields
       outcome,
       response,
       notes,
@@ -247,29 +222,12 @@ async function buildSummaryCSVRows(campaign, allStudents) {
       student_id: sid,
       campaign_id: campaign.id,
       campaign_name: campaign.name,
-    };
-
-    rows.push(row);
+    });
   });
 
   return { headers, rows };
 }
 
-function deriveFullName(stu) {
-  const cands = [
-    String(stu?.full_name || '').trim(),
-    String(stu?.fullName || '').trim(),
-    String(stu?.['Full Name*'] || '').trim(),
-    `${(stu?.first_name||'').trim()} ${(stu?.last_name||'').trim()}`.trim(),
-    `${(stu?.FirstName||'').trim()} ${(stu?.LastName||'').trim()}`.trim(),
-    `${(stu?.['First Name']||'').trim()} ${(stu?.['Last Name']||'').trim()}`.trim(),
-    String(stu?.name||'').trim(),
-    String(stu?.['Full Name']||'').trim(),
-  ].filter(Boolean);
-  return cands[0] || '';
-}
-
-/* DOM utils */
 function el(tag, className, ...children) {
   const n = document.createElement(tag);
   if (typeof className === 'string') { n.className = className; }
