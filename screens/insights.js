@@ -7,12 +7,10 @@ import {
   getStudentId
 } from '../data/campaignsData.js';
 
-import { loadProgressSnapshotFromSupabase } from "../data/campaignProgress.js";
-
-
 import {
+  loadProgressSnapshotFromSupabase,
   loadOrInitProgress
-} from '../data/campaignProgress.js';
+} from "../data/campaignProgress.js";
 
 // ---------- tiny DOM helpers ----------
 function div(cls, style = {}) {
@@ -86,18 +84,15 @@ function buildQueueMap(students, campaign) {
 
 // Flatten progress.contacts into activity rows (compatible with your progress shape)
 function extractRowsForCampaign(progress, idToStudent, campaignMeta) {
-  // Each contact key is the "Student ID" (queueId)
   const rows = [];
   const contacts = progress?.contacts || {};
   for (const [studentId, c] of Object.entries(contacts)) {
     const stu = idToStudent[studentId] || null;
     const fullName = pickName(stu);
 
-    // Prefer surveyAnswer as "Response"; otherwise fallback to outcome
     const response = c?.surveyAnswer ?? c?.outcome ?? null;
     const notes = String(c?.notes ?? '');
 
-    // Timestamp: prefer most recent survey log; else lastCalledAt
     let ts = c?.lastCalledAt || 0;
     if (Array.isArray(c?.surveyLogs) && c.surveyLogs.length > 0) {
       const last = c.surveyLogs[c.surveyLogs.length - 1];
@@ -110,7 +105,7 @@ function extractRowsForCampaign(progress, idToStudent, campaignMeta) {
       response,
       notes,
       timestamp,
-      studentId,                          // this is the campaign contact id
+      studentId,
       campaignId: String(campaignMeta.id),
       campaignName: campaignMeta.name || ''
     });
@@ -124,10 +119,7 @@ function overallResponseBar(ctx, counts) {
   const data = labels.map(k => counts[k]);
   return new Chart(ctx, {
     type: 'bar',
-    data: {
-      labels,
-      datasets: [{ label: 'Count', data }]
-    },
+    data: { labels, datasets: [{ label: 'Count', data }] },
     options: {
       responsive: true,
       plugins: { legend: { display: false } },
@@ -159,10 +151,7 @@ function responsesByHourLine(ctx, rows) {
   for (const d of answered) hours[d.getHours()] += 1;
   return new Chart(ctx, {
     type: 'line',
-    data: {
-      labels: [...Array(24).keys()].map(h => `${h}:00`),
-      datasets: [{ label: 'Answered', data: hours, tension: 0.25 }]
-    },
+    data: { labels: [...Array(24).keys()].map(h => `${h}:00`), datasets: [{ label: 'Answered', data: hours, tension: 0.25 }] },
     options: {
       responsive: true,
       plugins: { legend: { display: false } },
@@ -271,22 +260,24 @@ export async function Insights(root) {
   // State
   let charts = { overall: null, gy: null, hour: null, dow: null };
   let students = [];
-  let campaigns = [];
+  let campaignList = [];
 
   // Load base data
   try {
-    students = await getAllStudents(); // from data/students.json (or inline)
+    students = await getAllStudents();
   } catch (e) {
-    console.error('Insights: failed to load students.json', e);
+    console.error('Insights: failed to load students', e);
   }
   try {
-    campaigns = listCampaigns() || [];
+    const allCampaigns = await listCampaigns();            // <-- await it
+    campaignList = Array.isArray(allCampaigns) ? allCampaigns : [];
   } catch (e) {
     console.error('Insights: failed to list campaigns', e);
+    campaignList = [];
   }
 
-  // Active campaigns (if you track .active===false, filter it out)
-  const activeCampaigns = campaigns.filter(c => c?.active !== false);
+  // Active campaigns
+  const activeCampaigns = campaignList.filter(c => c?.active !== false);
 
   // Populate dropdown
   picker.innerHTML = '';
@@ -308,7 +299,7 @@ export async function Insights(root) {
   async function renderForCampaign(campaignId) {
     if (!campaignId) return;
 
-    const campaign = getCampaignById(campaignId);
+    const campaign = await getCampaignById(campaignId);    // <-- await it
     if (!campaign) {
       console.warn('Insights: campaign not found', campaignId);
       return;
@@ -317,13 +308,14 @@ export async function Insights(root) {
     // Rebuild queue + id map just like the execution screen does
     const { queueIds, idToStudent } = buildQueueMap(students, campaign);
 
-    // Load progress with these queueIds so totals stay consistent (and contacts are read)
-    let progress;
+    // Prefer shared/server progress; fallback to local snapshot
+    let progress = null;
     try {
-      progress = await loadOrInitProgress(campaign.id, queueIds);
+      const snap = await loadProgressSnapshotFromSupabase(campaign.id);
+      progress = snap || await loadOrInitProgress(campaign.id, queueIds);
     } catch (e) {
-      console.error('Insights: failed to load progress', e);
-      return;
+      console.warn('Insights: server snapshot failed, using local', e);
+      progress = await loadOrInitProgress(campaign.id, queueIds);
     }
 
     // Build normalized rows for the charts/table
