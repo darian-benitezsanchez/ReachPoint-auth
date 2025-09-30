@@ -6,74 +6,65 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="./favicon.ico" />
     <link rel="stylesheet" href="./styles.css" />
-    <!-- bcryptjs for client-side hash comparison (used by Login-Screen.js) -->
-    <script src="https://cdn.jsdelivr.net/npm/bcryptjs@2.4.3/dist/bcrypt.min.js" defer></script>
+
+    <!-- Supabase JS v2 -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <script>
+      // ===== DEV ONLY: Inject your ReachPoint-dev credentials =====
+      // NOTE: Use env vars / server proxy for prod builds.
+      window.__SUPABASE_URL__ = "https://qmhxpugetaksrktyfmji.supabase.co";  // <-- replace with real URL
+      window.__SUPABASE_ANON_KEY__ = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtaHhwdWdldGFrc3JrdHlmbWppIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg3NjA0NzYsImV4cCI6MjA3NDMzNjQ3Nn0.-pS4lHZKwxiVh3XL191_IMcZ-JvESva3zo2elTfSDGg";                      // <-- replace with anon key
+
+      // Create a single shared client for the whole app.
+      // We disable auth session persistence to keep the app fully “stateless” on the client.
+      (function initSupabase() {
+        try {
+          if (!window.__SUPABASE_URL__ || !window.__SUPABASE_ANON_KEY__) {
+            console.warn("[ReachPoint] Supabase credentials missing; running in fallback (local only).");
+            return;
+          }
+          window.supabase = window.supabase || supabase.createClient(
+            window.__SUPABASE_URL__,
+            window.__SUPABASE_ANON_KEY__,
+            {
+              auth: { persistSession: false },
+              global: { headers: { "x-reachpoint-env": "dev" } }
+            }
+          );
+          console.log("[ReachPoint] Supabase client initialized.");
+        } catch (e) {
+          console.error("[ReachPoint] Failed to init Supabase, fallback to local only.", e);
+        }
+      })();
+
+      // Small helper for modules to check availability without import cycles
+      window.hasSupabase = () => !!window.supabase;
+    </script>
   </head>
+
   <body>
     <header class="topbar">
       <div class="brand">ReachPoint</div>
-      <nav class="nav" id="mainNav">
+      <nav class="nav">
         <a href="#/dashboard">Dashboard</a>
         <a href="#/create">New Campaign</a>
+        <a href="#/call">Call Anyone</a>
+        <a href="#/insights">Insights</a>
       </nav>
     </header>
 
+    <!-- App root -->
     <main id="app"></main>
 
-    <!-- SPA bootloader: preserves your current routing while wiring the Login screen -->
-    <script type="module">
-      const SESSION_KEY = 'rpAuth';
-      const navEl = document.getElementById('mainNav');
-
-      function isAuthed() {
-        return !!sessionStorage.getItem(SESSION_KEY);
+    <!-- Default route BEFORE app loads -->
+    <script>
+      if (!location.hash || !/^#\//.test(location.hash)) {
+        location.hash = "#/dashboard";
       }
-
-      // Decide which module to load based on auth + route
-      async function boot() {
-        const authed = isAuthed();
-
-        // If not authenticated, hide nav and force login route
-        if (!authed) {
-          if (navEl) navEl.style.display = 'none';
-          if (location.hash !== '#/login') location.hash = '#/login';
-          await import('./screens/Login-Screen.js'); // renders into #app
-          return;
-        }
-
-        // Authenticated: show nav and ensure a default route
-        if (navEl) navEl.style.display = '';
-        if (!location.hash || location.hash === '#/login') {
-          location.hash = '#/dashboard';
-        }
-
-        // Load your existing SPA/router as before
-        await import('./app.js');
-      }
-
-      // Re-run boot when the hash changes (simple guard)
-      window.addEventListener('hashchange', () => {
-        const authed = isAuthed();
-
-        // Block any non-login route if not authed
-        if (!authed && location.hash !== '#/login') {
-          location.hash = '#/login';
-        }
-
-        // Toggle nav visibility based on auth
-        if (navEl) navEl.style.display = authed ? '' : 'none';
-
-        // Allow app.js (router) to handle route changes once authed.
-        // If we just became unauthenticated (e.g., after a logout implemented in app.js),
-        // Login-Screen will take over on the next boot call.
-        boot();
-      });
-
-      // Initial boot
-      boot();
     </script>
 
-    <!-- Important: must be served over HTTP(S), not file:// -->
-    <!-- Note: app.js is now loaded dynamically by the boot script above to preserve auth routing -->
+    <!-- Your app bundle -->
+    <script type="module" src="./app.js"></script>
   </body>
 </html>

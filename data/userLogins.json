@@ -1,16 +1,14 @@
 [
   {
     "userId": "karla",
-    "passwordHash": "$2a$10$7l7p9cGwa5Jm0xq7rLhGnuVz5mJ4Y1s1KxU3o8Dvyjv8vQ6O0Fqmy",
+    "passwordPlain": "cats-are-cool",  
     "role": "admin",
-    "active": true,
-    "createdAt": "2025-09-18T19:00:00.000Z"
+    "active": true
   },
   {
     "userId": "aracely",
-    "passwordHash": "$2a$10$w1lM0O6k9E7y7zQWb9yMje9s/3D5xU7xq5oKrntWk7m6tx0e5Ew7C",
-    "role": "admin",
-    "active": true,
-    "createdAt": "2025-09-18T19:05:00.000Z"
+    "passwordPlain": "welcome123",
+    "role": "staff",
+    "active": true
   }
 ]

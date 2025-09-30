@@ -1,8 +1,12 @@
 // screens/Login-Screen.js
-// Renders the login screen and handles sign-in for a private site.
-// Requires bcryptjs (browser) loaded by index.html.
+// SIMPLE MODE ONLY: uses plaintext passwords in data/userLogins.json
+// Expected JSON shape:
+// [
+//   { "userId": "darian", "passwordPlain": "cats-are-cool", "role": "admin", "active": true },
+//   ...
+// ]
 
-const LOGIN_JSON_URL = '../data/userLogins.json';
+const LOGIN_JSON_URL = './data/userLogins.json';
 const SESSION_KEY = 'rpAuth';
 
 function setSession(user) {
@@ -50,12 +54,20 @@ async function handleLoginSubmit(e) {
   errEl.textContent = '';
 
   const userId = document.getElementById('userId').value.trim();
+  // Do NOT trim password—spaces could be intentional
   const password = document.getElementById('password').value;
 
   try {
     const users = await loadUsers();
+    if (!Array.isArray(users)) {
+      errEl.textContent = 'User list is misconfigured.';
+      return;
+    }
+
     const user = users.find(
-      (u) => u.userId?.toLowerCase() === userId.toLowerCase() && u.active !== false
+      (u) =>
+        String(u.userId || '').toLowerCase() === userId.toLowerCase() &&
+        u.active !== false
     );
 
     if (!user) {
@@ -63,20 +75,19 @@ async function handleLoginSubmit(e) {
       return;
     }
 
-    const bcryptLib = window.bcrypt || (window.dcodeIO && window.dcodeIO.bcrypt);
-    if (!bcryptLib) {
-      errEl.textContent = 'Auth dependency missing. Try refreshing.';
+    if (typeof user.passwordPlain !== 'string') {
+      errEl.textContent = 'Account is misconfigured (no password).';
       return;
     }
 
-    const ok = bcryptLib.compareSync(password, user.passwordHash);
-    if (!ok) {
-      errEl.textContent = 'Invalid credentials.';
+    if (password === user.passwordPlain) {
+      setSession(user);
+      // Route-only navigation; bootloader will import app.js and render dashboard
+      location.hash = '#/dashboard';
       return;
     }
 
-    setSession(user);
-    window.location.href = '../dashboard.html';
+    errEl.textContent = 'Invalid credentials.';
   } catch (err) {
     console.error(err);
     errEl.textContent = 'Login failed. Please try again.';
@@ -89,9 +100,9 @@ function attachHandlers() {
 }
 
 (function init() {
-  // If already logged in, skip to dashboard
+  // If already logged in, skip to dashboard (no extra checks)
   if (sessionStorage.getItem(SESSION_KEY)) {
-    window.location.replace('../dashboard.html');
+    location.hash = '#/dashboard';
     return;
   }
 
