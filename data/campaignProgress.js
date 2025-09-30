@@ -237,39 +237,48 @@ export async function loadProgressSnapshotFromSupabase(campaignId) {
   const s = supa();
   if (!s) return null;
 
-  // call progress rows
+  // 1) call progress rows
   const { data: cp, error: e1 } = await s
     .from("call_progress")
     .select("contact_id, attempts, outcome, last_called_at")
     .eq("campaign_id", campaignId);
   if (e1) { console.warn("call_progress error", e1); return null; }
 
-  // latest survey per contact
-  let latestSurvey = {};
-  try {
-    const { data: sr, error: e2 } = await s.rpc("get_latest_survey_per_contact", { p_campaign_id: campaignId });
-    if (!e2 && Array.isArray(sr)) {
-      for (const r of sr) latestSurvey[r.contact_id] = r;
-    } else {
-      const { data: allSr } = await s.from("survey_responses").select("contact_id, answer, at").eq("campaign_id", campaignId);
-      for (const r of (allSr || [])) {
-        const prev = latestSurvey[r.contact_id];
-        if (!prev || new Date(r.at) > new Date(prev.at)) latestSurvey[r.contact_id] = r;
+  // 2) latest survey per contact (no RPC; table query, newest first)
+  const latestSurvey = {};
+  {
+    const { data: allSr, error: e2 } = await s
+      .from("survey_responses")
+      .select("contact_id, answer, at")
+      .eq("campaign_id", campaignId)
+      .order("at", { ascending: false });
+    if (!e2 && Array.isArray(allSr)) {
+      for (const r of allSr) {
+        if (!latestSurvey[r.contact_id]) latestSurvey[r.contact_id] = r; // first seen is newest
       }
-    }
-  } catch {}
-
-  // latest note per contact
-  const { data: allNotes, error: eN } = await s.from("notes").select("contact_id, text, at").eq("campaign_id", campaignId);
-  const latestNote = {};
-  if (!eN && Array.isArray(allNotes)) {
-    for (const r of allNotes) {
-      const prev = latestNote[r.contact_id];
-      if (!prev || new Date(r.at) > new Date(prev.at)) latestNote[r.contact_id] = r;
+    } else if (e2) {
+      console.warn("[ReachPoint] survey_responses fetch failed:", e2);
     }
   }
 
-  // compose
+  // 3) latest note per contact
+  const latestNote = {};
+  {
+    const { data: allNotes, error: eN } = await s
+      .from("notes")
+      .select("contact_id, text, at")
+      .eq("campaign_id", campaignId)
+      .order("at", { ascending: false });
+    if (!eN && Array.isArray(allNotes)) {
+      for (const r of allNotes) {
+        if (!latestNote[r.contact_id]) latestNote[r.contact_id] = r; // newest first
+      }
+    } else if (eN) {
+      console.warn("[ReachPoint] notes fetch failed:", eN);
+    }
+  }
+
+  // 4) compose snapshot
   const contacts = {};
   for (const row of (cp || [])) {
     contacts[row.contact_id] = {
@@ -277,7 +286,7 @@ export async function loadProgressSnapshotFromSupabase(campaignId) {
       outcome: row.outcome || undefined,
       lastCalledAt: row.last_called_at ? new Date(row.last_called_at).getTime() : 0,
       surveyAnswer: latestSurvey[row.contact_id]?.answer || undefined,
-      surveyLogs: [],
+      surveyLogs: [], // logs are still kept client-side; server is append-only
       notes: latestNote[row.contact_id]?.text || "",
       notesLogs: [],
     };
@@ -299,7 +308,7 @@ export function subscribeToCampaignProgress(campaignId, onChange) {
   if (!s) return () => {};
   const ch = s.channel(`progress-${campaignId}`)
     .on("postgres_changes",
-      { event: "*", schema: "public", table: "call_progress", filter: `campaign_id=eq.${campaignId}` },
+      { event: "*", schema: "public", table: "call_progress",   filter: `campaign_id=eq.${campaignId}` },
       onChange
     )
     .on("postgres_changes",
@@ -307,7 +316,7 @@ export function subscribeToCampaignProgress(campaignId, onChange) {
       onChange
     )
     .on("postgres_changes",
-      { event: "*", schema: "public", table: "notes", filter: `campaign_id=eq.${campaignId}` },
+      { event: "*", schema: "public", table: "notes",             filter: `campaign_id=eq.${campaignId}` },
       onChange
     )
     .subscribe();
@@ -318,7 +327,7 @@ export function subscribeToCampaignProgress(campaignId, onChange) {
 export async function removeProgress(campaignId) {
   try { localStorage.removeItem(K.PROG_PREFIX + campaignId); } catch {}
 }
- 
+
 // ---------- name resolution helpers ----------
 function resolveName(resolver, id) {
   if (!resolver) return "";
@@ -350,3 +359,11 @@ function joinNames(first, last) {
   const b = String(last || "").trim();
   return (a + " " + b).trim();
 }
+
+/*
+  (Optional) DB performance tip:
+  Add this index once to keep the "latest per contact" fetch fast.
+
+  create index if not exists idx_survey_responses_campaign_contact_at
+    on public.survey_responses (campaign_id, contact_id, at desc);
+*/
