@@ -1,15 +1,11 @@
 // screens/execution.js
 import { getAllStudents, applyFilters, getStudentId } from '../data/campaignsData.js';
-
 import {
-  // server-first reads
   loadProgressSnapshotFromSupabase,
   subscribeToCampaignProgress,
-  // writes
   recordOutcome,
   recordSurveyResponse,
   recordNote,
-  // reads used by UI
   loadOrInitProgress,
   getSurveyResponse,
   getNote,
@@ -23,7 +19,6 @@ export async function Execute(root, campaign) {
   const wrap = document.createElement('div');
 
   let students = [];
-  let filtered = [];
   let queueIds = [];
   const idToStudent = {};
 
@@ -34,23 +29,74 @@ export async function Execute(root, campaign) {
   let selectedSurveyAnswer = null;
   let currentNotes = '';
 
-  // Simple undo stack
   const undoStack = [];
+
+  // ---- helpers to normalize campaign inputs ----
+  function normalizeFilters(raw) {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'string') {
+      try { const v = JSON.parse(raw); return Array.isArray(v) ? v : []; } catch { return []; }
+    }
+    return [];
+  }
+
+  function buildQueueForCampaign(allStudents, camp) {
+    const filters = normalizeFilters(camp.filters);
+
+    // Map student rows by common identifiers to resolve student_ids quickly.
+    const byId = new Map();
+    allStudents.forEach((s, idx) => {
+      const keys = [
+        s.id, s.student_id, s.uuid,
+        // Also include your derived id so both paths work
+        getStudentId(s, idx),
+      ].map(String).filter(Boolean);
+      keys.forEach(k => byId.set(k, s));
+    });
+
+    let base = applyFilters(allStudents, filters);
+
+    // If the campaign has an explicit student_ids list, prefer that over filters:
+    let ids = [];
+    if (Array.isArray(camp.student_ids) && camp.student_ids.length) {
+      // Keep only those ids that we can resolve to a student
+      ids = camp.student_ids.map(String).filter(id => byId.has(id));
+      base = ids.map(id => byId.get(id));
+    } else {
+      // No explicit list — build ids from filtered set using your stable getStudentId
+      ids = base.map((s, i) => getStudentId(s, i));
+    }
+
+    // Build id -> student map consistent with the chosen ids
+    const m = {};
+    if (Array.isArray(camp.student_ids) && camp.student_ids.length) {
+      // Map by real ids
+      ids.forEach(id => { m[id] = byId.get(id); });
+    } else {
+      // Map by derived ids
+      base.forEach((s, i) => { m[getStudentId(s, i)] = s; });
+    }
+
+    return { queueIds: ids, idToStudent: m };
+  }
 
   // ======= BOOT (server-first with fallback) =======
   let unsubscribe = null;
   try {
     students = await getAllStudents();
-    filtered = applyFilters(students, campaign.filters || []);
-    queueIds = filtered.map((s, i) => getStudentId(s, i));
-    filtered.forEach((s, i) => { idToStudent[getStudentId(s, i)] = s; });
+
+    // Build queue using normalized filters and/or student_ids
+    const built = buildQueueForCampaign(students, campaign);
+    queueIds = built.queueIds;
+    Object.assign(idToStudent, built.idToStudent);
 
     // Prefer shared/server snapshot; fallback to local snapshot initialized with this queue
     const remote = await loadProgressSnapshotFromSupabase(campaign.id);
     const local  = await loadOrInitProgress(campaign.id, queueIds);
     progress = remote ? mergeProgress(local, remote) : local;
 
-    // Live updates (optional, safe if not supported)
+    // Live updates
     if (typeof subscribeToCampaignProgress === 'function') {
       unsubscribe = subscribeToCampaignProgress(campaign.id, async () => {
         try {
@@ -86,7 +132,6 @@ export async function Execute(root, campaign) {
   }
 
   async function advance(strategy, skipId){
-    // Refresh from server if possible; fallback to local
     try {
       const r = await loadProgressSnapshotFromSupabase(campaign.id);
       if (r) progress = mergeProgress(progress, r);
@@ -113,7 +158,6 @@ export async function Execute(root, campaign) {
     selectedSurveyAnswer = ans;
     await recordSurveyResponse(campaign.id, currentId, ans);
 
-    // Refresh from server so logs/answers reflect across devices
     try {
       const r = await loadProgressSnapshotFromSupabase(campaign.id);
       if (r) progress = mergeProgress(progress, r);
@@ -134,7 +178,6 @@ export async function Execute(root, campaign) {
 
     progress = await recordOutcome(campaign.id, currentId, kind);
 
-    // Refresh from server to include any parallel updates
     try {
       const r = await loadProgressSnapshotFromSupabase(campaign.id);
       if (r) progress = mergeProgress(progress, r);
@@ -156,7 +199,6 @@ export async function Execute(root, campaign) {
       if (mode!=='running' && mode!=='missed') mode = 'running';
       currentNotes = await getNote(last.campaignId, last.studentId);
 
-      // Pull fresh
       try {
         const r = await loadProgressSnapshotFromSupabase(campaign.id);
         if (r) progress = mergeProgress(progress, r);
@@ -273,9 +315,7 @@ export async function Execute(root, campaign) {
           marginBottom: '12px'
         });
 
-        const nameNode = h1(
-          `${String(stu.full_name ?? '')}`.trim() || 'Current contact'
-        );
+        const nameNode = h1(`${String(stu.full_name ?? '')}`.trim() || 'Current contact');
         nameNode.style.textAlign = 'center';
         nameNode.style.fontWeight = '800';
 
@@ -326,7 +366,6 @@ export async function Execute(root, campaign) {
 
   render();
 
-  // ======= teardown on route change (and unmount) =======
   window.addEventListener('hashchange', () => {
     if (typeof keyHandler === 'function') {
       window.removeEventListener('keydown', keyHandler);
@@ -334,14 +373,10 @@ export async function Execute(root, campaign) {
     try { unsubscribe && unsubscribe(); } catch {}
   });
 
-  /* ---------------- Notes UI & Handlers ---------------- */
-
+  // -------- Notes UI & Handlers --------
   function debounce(fn, delay=400) {
     let t = 0;
-    return (...args) => {
-      clearTimeout(t);
-      t = setTimeout(() => fn(...args), delay);
-    };
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); };
   }
 
   const debouncedSaveNotes = debounce(async (cid, sid, text) => {
@@ -418,7 +453,6 @@ export async function Execute(root, campaign) {
     return box;
   }
 
-  // Supports options { hideActions, compact }
   async function summaryBlock(campaignId, onMissed, onFinish, opts = {}) {
     const { hideActions = false, compact = false } = opts;
     const t = await getSummary(campaignId);
@@ -518,7 +552,7 @@ export async function Execute(root, campaign) {
     return a;
   }
 
-  /* dom utilities (SAFE VARIADIC VERSION) */
+  /* dom utilities */
   function div(cls, ...args) {
     const n = document.createElement('div');
     if (cls) n.className = cls;
