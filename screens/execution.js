@@ -9,14 +9,12 @@ import {
   recordOutcome,
   recordSurveyResponse,
   recordNote,
-  // missing reads you’re using below
+  // reads used by UI
   loadOrInitProgress,
   getSurveyResponse,
   getNote,
   getSummary,
 } from "../data/campaignProgress.js";
-
-
 
 export async function Execute(root, campaign) {
   if (!campaign) { location.hash = '#/dashboard'; return; }
@@ -34,19 +32,33 @@ export async function Execute(root, campaign) {
   let passStrategy = 'unattempted'; // 'unattempted' | 'missed'
   let currentId = undefined;
   let selectedSurveyAnswer = null;
-  let currentNotes = '';            // <= NEW
+  let currentNotes = '';
 
   // Simple undo stack
   const undoStack = [];
 
-  // ======= BOOT (with error splash) =======
+  // ======= BOOT (server-first with fallback) =======
+  let unsubscribe = null;
   try {
     students = await getAllStudents();
     filtered = applyFilters(students, campaign.filters || []);
     queueIds = filtered.map((s, i) => getStudentId(s, i));
     filtered.forEach((s, i) => { idToStudent[getStudentId(s, i)] = s; });
 
-    progress = await loadOrInitProgress(campaign.id, queueIds);
+    // Prefer shared/server snapshot; fallback to local snapshot initialized with this queue
+    const remote = await loadProgressSnapshotFromSupabase(campaign.id);
+    const local  = await loadOrInitProgress(campaign.id, queueIds);
+    progress = remote ? mergeProgress(local, remote) : local;
+
+    // Live updates (optional, safe if not supported)
+    if (typeof subscribeToCampaignProgress === 'function') {
+      unsubscribe = subscribeToCampaignProgress(campaign.id, async () => {
+        try {
+          const r = await loadProgressSnapshotFromSupabase(campaign.id);
+          if (r) { progress = mergeProgress(progress, r); render(); }
+        } catch (e) { console.warn('[Execute] live refresh failed', e); }
+      });
+    }
   } catch (err) {
     showError(err);
     return;
@@ -74,7 +86,15 @@ export async function Execute(root, campaign) {
   }
 
   async function advance(strategy, skipId){
-    progress = await loadOrInitProgress(campaign.id, queueIds);
+    // Refresh from server if possible; fallback to local
+    try {
+      const r = await loadProgressSnapshotFromSupabase(campaign.id);
+      if (r) progress = mergeProgress(progress, r);
+      else   progress = await loadOrInitProgress(campaign.id, queueIds);
+    } catch {
+      progress = await loadOrInitProgress(campaign.id, queueIds);
+    }
+
     currentId = pickNextId(progress, strategy, skipId);
     selectedSurveyAnswer = null;
     currentNotes = '';
@@ -92,6 +112,13 @@ export async function Execute(root, campaign) {
 
     selectedSurveyAnswer = ans;
     await recordSurveyResponse(campaign.id, currentId, ans);
+
+    // Refresh from server so logs/answers reflect across devices
+    try {
+      const r = await loadProgressSnapshotFromSupabase(campaign.id);
+      if (r) progress = mergeProgress(progress, r);
+    } catch {}
+
     render();
   }
 
@@ -106,6 +133,13 @@ export async function Execute(root, campaign) {
     });
 
     progress = await recordOutcome(campaign.id, currentId, kind);
+
+    // Refresh from server to include any parallel updates
+    try {
+      const r = await loadProgressSnapshotFromSupabase(campaign.id);
+      if (r) progress = mergeProgress(progress, r);
+    } catch {}
+
     const skip = passStrategy==='missed' ? currentId : undefined;
     await advance(passStrategy, skip);
   }
@@ -121,6 +155,13 @@ export async function Execute(root, campaign) {
       selectedSurveyAnswer = last.prev ?? null;
       if (mode!=='running' && mode!=='missed') mode = 'running';
       currentNotes = await getNote(last.campaignId, last.studentId);
+
+      // Pull fresh
+      try {
+        const r = await loadProgressSnapshotFromSupabase(campaign.id);
+        if (r) progress = mergeProgress(progress, r);
+      } catch {}
+
       render();
       return;
     }
@@ -134,9 +175,6 @@ export async function Execute(root, campaign) {
       return;
     }
   }
-
-  // ======= Keyboard shortcuts (disabled) =======
-  // (Keep teardown guard below in case you add it back later.)
 
   // ======= Swipe (pointer) with guard so buttons still work =======
   function isNoSwipeTarget(ev){
@@ -181,10 +219,9 @@ export async function Execute(root, campaign) {
     const t = totals();
     const pctNum = Math.round(pct()*100);
 
-    // Top bar WITHOUT a back button now (we move it to the bottom action row)
     return div('',
       div('topHeader',
-        div('headerLeft'), // empty spacer
+        div('headerLeft'),
         div('progressWrap',
           div('progressBar', div('progressFill'), { width: pctNum + '%' }),
           ptext(`${t.made}/${t.total} complete • ${t.answered} answered • ${t.missed} missed`,'progressText')
@@ -199,7 +236,6 @@ export async function Execute(root, campaign) {
       wrap.append(header());
 
       if (mode === 'idle') {
-        // Main idle section with title, count, and Begin button
         const idleBox = center(
           h1(campaign.name || 'Campaign'),
           ptext(`${queueIds.length} contact${queueIds.length===1?'':'s'} in this campaign`, 'muted'),
@@ -207,11 +243,9 @@ export async function Execute(root, campaign) {
         );
         wrap.append(idleBox);
 
-        // Compact summary directly under the Begin button with tight spacing
         const summaryMount = div('', { margin: '6px auto 0', maxWidth: '800px' });
         wrap.append(summaryMount);
 
-        // Build and insert the summary (async) — hide actions on idle, compact spacing
         summaryBlock(
           campaign.id,
           async () => { await beginMissed(); },
@@ -231,7 +265,6 @@ export async function Execute(root, campaign) {
         const swipe = div('');
         attachSwipe(swipe);
 
-        // === Centered contact header (name + hint + call button) ===
         const headerBox = div('', {
           display: 'flex',
           flexDirection: 'column',
@@ -254,7 +287,6 @@ export async function Execute(root, campaign) {
 
         headerBox.append(nameNode, hintNode, callBtnNode);
 
-        // Bottom action row WITH Back button
         const backBtn = button('← Back', 'btn backBtn', onBack);
         backBtn.disabled = undoStack.length === 0;
         if (backBtn.disabled) backBtn.style.opacity = '.6';
@@ -277,7 +309,6 @@ export async function Execute(root, campaign) {
       }
 
       if (mode==='summary') {
-        // Full summary with actions (unchanged)
         summaryBlock(
           campaign.id,
           async ()=>{ await beginMissed(); },
@@ -295,12 +326,12 @@ export async function Execute(root, campaign) {
 
   render();
 
-  // ======= teardown on route change (optional) =======
+  // ======= teardown on route change (and unmount) =======
   window.addEventListener('hashchange', () => {
-    // Safe even if keyHandler was never defined/attached
     if (typeof keyHandler === 'function') {
       window.removeEventListener('keydown', keyHandler);
     }
+    try { unsubscribe && unsubscribe(); } catch {}
   });
 
   /* ---------------- Notes UI & Handlers ---------------- */
@@ -502,8 +533,8 @@ export async function Execute(root, campaign) {
     return n;
   }
   function h1(t){ const n=document.createElement('div'); n.className='title'; n.textContent=t; return n; }
-  function h2(t,cls){ const n=document.createElement('div'); n.className=cls||''; n.textContent=t; return n; }
-  function ptext(t,cls){ const n=document.createElement('div'); n.className=cls||''; n.textContent=t; return n; }
+  function h2(t,cls){ const n=document.createElement('div'); if (cls) n.className=cls; n.textContent=t; return n; }
+  function ptext(t,cls){ const n=document.createElement('div'); if (cls) n.className=cls; n.textContent=t; return n; }
   function center(...kids){ const n=div('center'); kids.forEach(k=>k && n.append(k)); return n; }
   function button(text, cls, on){
     const b=document.createElement('button');
@@ -522,7 +553,16 @@ export async function Execute(root, campaign) {
     kids.forEach(k=>k&&r.append(k));
     return r;
   }
-  function disabledBtn(text){ const b=document.createElement('button'); b.className='callBtn'; b.textContent=text; b.disabled=true; b.style.opacity=.6; b.setAttribute('data-noswipe','1'); b.addEventListener('pointerdown', e => e.stopPropagation()); return b; }
+  function disabledBtn(text){
+    const b=document.createElement('button');
+    b.className='callBtn';
+    b.textContent=text;
+    b.disabled=true;
+    b.style.opacity=.6;
+    b.setAttribute('data-noswipe','1');
+    b.addEventListener('pointerdown', e => e.stopPropagation());
+    return b;
+  }
   function chip(label, cls, on){
     const c=document.createElement('button');
     c.className=cls;
@@ -555,4 +595,40 @@ export async function Execute(root, campaign) {
     root.innerHTML = '';
     root.append(errorBox(err));
   }
+}
+
+/* ---------- merge helper: reconciles local + remote ---------- */
+function mergeProgress(local, remote) {
+  const L = local  && typeof local  === 'object' ? local  : { campaignId: remote?.campaignId, totals:{total:0,made:0,answered:0,missed:0}, contacts:{} };
+  const R = remote && typeof remote === 'object' ? remote : { campaignId: L.campaignId, totals:{total:0,made:0,answered:0,missed:0}, contacts:{} };
+
+  const out = { campaignId: L.campaignId || R.campaignId, totals: { ...L.totals }, contacts: { ...L.contacts } };
+
+  for (const [id, rc] of Object.entries(R.contacts || {})) {
+    const lc = out.contacts[id] || {};
+    const attempts = Math.max(Number(lc.attempts||0), Number(rc.attempts||0));
+    const lastCalledAt = Math.max(Number(lc.lastCalledAt||0), Number(rc.lastCalledAt||0)) || 0;
+    const outcome = rc.outcome ?? lc.outcome;
+
+    const lLogs = Array.isArray(lc.surveyLogs) ? lc.surveyLogs : [];
+    const rLogs = Array.isArray(rc.surveyLogs) ? rc.surveyLogs : [];
+    const mergedLogs = [...lLogs, ...rLogs].sort((a,b)=>(a?.at||0)-(b?.at||0));
+    const surveyAnswer = mergedLogs.length ? mergedLogs[mergedLogs.length-1].answer : (rc.surveyAnswer ?? lc.surveyAnswer);
+
+    const lNoteAt = (lc.notesLogs && lc.notesLogs[lc.notesLogs.length-1]?.at) || 0;
+    const rNoteAt = (rc.notesLogs && rc.notesLogs[rc.notesLogs.length-1]?.at) || 0;
+    const useR = rNoteAt >= lNoteAt;
+    const notes = useR ? (rc.notes ?? lc.notes) : (lc.notes ?? rc.notes);
+    const notesLogs = [...(lc.notesLogs||[]), ...(rc.notesLogs||[])].sort((a,b)=>(a?.at||0)-(b?.at||0)).slice(-10);
+
+    out.contacts[id] = { attempts, lastCalledAt, outcome, surveyAnswer, surveyLogs: mergedLogs, notes, notesLogs };
+  }
+
+  const seen = Object.values(out.contacts);
+  out.totals.made = seen.reduce((n,c)=>n + (c.attempts>0?1:0), 0);
+  out.totals.answered = seen.reduce((n,c)=>n + (c.outcome==='answered'?1:0), 0);
+  out.totals.missed = seen.reduce((n,c)=>n + (c.outcome==='no_answer'?1:0), 0);
+  out.totals.total = L.totals?.total ?? R.totals?.total ?? 0;
+
+  return out;
 }
