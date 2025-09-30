@@ -1,14 +1,5 @@
 // screens/execution.js
 import { getAllStudents, applyFilters, getStudentId } from '../data/campaignsData.js';
-import {
-  loadOrInitProgress,
-  recordOutcome,
-  getSummary,
-  recordSurveyResponse,
-  getSurveyResponse,
-  recordNote,            // <= NEW
-  getNote                // <= NEW
-} from '../data/campaignProgress.js';
 
 import {
   loadProgressSnapshotFromSupabase,
