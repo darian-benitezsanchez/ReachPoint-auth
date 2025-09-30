@@ -7,6 +7,9 @@ import {
   getStudentId
 } from '../data/campaignsData.js';
 
+import { loadProgressSnapshotFromSupabase } from "../data/campaignProgress.js";
+
+
 import {
   loadOrInitProgress
 } from '../data/campaignProgress.js';

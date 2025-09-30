@@ -10,6 +10,15 @@ import {
   getNote                // <= NEW
 } from '../data/campaignProgress.js';
 
+import {
+  loadProgressSnapshotFromSupabase,
+  subscribeToCampaignProgress,
+  recordOutcome,
+  recordSurveyResponse,
+  recordNote
+} from "../data/campaignProgress.js";
+
+
 export async function Execute(root, campaign) {
   if (!campaign) { location.hash = '#/dashboard'; return; }
 

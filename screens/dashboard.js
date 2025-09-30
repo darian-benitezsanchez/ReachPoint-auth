@@ -9,6 +9,8 @@ import {
   deleteCampaign, // <= added back for deletion
 } from '../data/campaignsData.js';
 
+import { loadProgressSnapshotFromSupabase, persistFullExportRows } from "../data/campaignProgress.js";
+
 import {
   exportNotCalledCSV,
   removeProgress,               // clear progress on delete
@@ -141,8 +143,8 @@ async function buildSummaryCSVRows(campaign, allStudents) {
   filtered.forEach((s,i)=>{ idToStudent[getStudentId(s,i)] = s; });
 
   // Pull from progress store for outcomes/responses/timestamps/notes
-  const raw = JSON.parse(localStorage.getItem('reachpoint.progress.'+campaign.id) || '{}');
-  const contacts = raw.contacts || {};
+  const snap = await loadProgressSnapshotFromSupabase(campaign.id);
+  const contacts = snap?.contacts || {};
 
   // CSV headers aligned to Supabase-normalized student columns
   const headers = [

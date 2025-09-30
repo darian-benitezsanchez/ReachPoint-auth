@@ -1,13 +1,11 @@
 // data/campaignsData.js
 
-// Storage keys
+// ---------- keys & utils ----------
 const K = {
-  CAMPAIGNS: "reachpoint.campaigns",
-  STUDENTS_CACHE: "reachpoint.studentsCache.v1", // optional local cache
+  CAMPAIGNS: "reachpoint.campaigns",          // local cache (fallback)
+  STUDENTS_CACHE: "reachpoint.studentsCache.v1",
   STUDENTS_CACHE_AT: "reachpoint.studentsCacheAt",
 };
-
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 function nowIso() { return new Date().toISOString(); }
 export function toISODate(d) {
@@ -16,7 +14,9 @@ export function toISODate(d) {
   const dd = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${dd}`;
 }
+function supa() { return (window.hasSupabase && window.hasSupabase()) ? window.supabase : null; }
 
+// ---------- student helpers ----------
 /** Derive a stable student id from row + position (compatible with your app) */
 export function getStudentId(student, idx) {
   const key =
@@ -48,23 +48,19 @@ export function applyFilters(rows, filters) {
   return rows.filter(r => filters.every(f => (ops[f.op] || ops["="])(r?.[f.field], f.value)));
 }
 
-/* ---------------- Students: Supabase-first with graceful fallback ---------------- */
-
+// ---------- Students: Supabase-first with graceful fallback ----------
 /**
  * Attempts to read from Supabase table `students`.
  * - If available, returns full array and refreshes local cache.
  * - If offline or error, falls back to cache, then to ./data/students.json file.
  */
 export async function getAllStudents() {
-  // 1) Try Supabase if present
   try {
-    if (window.hasSupabase && window.hasSupabase()) {
-      const { data, error } = await window.supabase
-        .from("students")
-        .select("*"); // customize columns if needed
+    const s = supa();
+    if (s) {
+      const { data, error } = await s.from("students").select("*");
       if (error) throw error;
       if (Array.isArray(data)) {
-        // refresh local cache (lightweight)
         localStorage.setItem(K.STUDENTS_CACHE, JSON.stringify(data));
         localStorage.setItem(K.STUDENTS_CACHE_AT, nowIso());
         return data;
@@ -74,17 +70,16 @@ export async function getAllStudents() {
     console.warn("[ReachPoint] Supabase students fetch failed; will try cache/file.", err);
   }
 
-  // 2) Try cache if fresh enough (< 1 day old)
+  // cache fallback
   try {
     const cached = localStorage.getItem(K.STUDENTS_CACHE);
-    const at = localStorage.getItem(K.STUDENTS_CACHE_AT);
     if (cached) {
       const rows = JSON.parse(cached);
       if (Array.isArray(rows)) return rows;
     }
   } catch {}
 
-  // 3) Fallback to file on disk (dev)
+  // file fallback (dev only)
   try {
     const resp = await fetch("./data/students.json", { cache: "no-store" });
     if (resp.ok) {
@@ -100,23 +95,50 @@ export async function getAllStudents() {
     console.error("[ReachPoint] Could not load ./data/students.json", e);
   }
 
-  // 4) Final fallback: empty
   return [];
 }
 
-/* ---------------- Campaign CRUD (unchanged: local only) ---------------- */
-
-export function listCampaigns() {
-  try { return JSON.parse(localStorage.getItem(K.CAMPAIGNS) || "[]"); }
-  catch { return []; }
+// ---------- Campaigns: Supabase-first CRUD (local fallback) ----------
+export async function listCampaigns() {
+  const s = supa();
+  if (s) {
+    const { data, error } = await s.from("campaigns").select("*").order("created_at", { ascending: false });
+    if (!error && Array.isArray(data)) {
+      try { localStorage.setItem(K.CAMPAIGNS, JSON.stringify(data)); } catch {}
+      return data;
+    }
+    console.warn("[ReachPoint] listCampaigns Supabase error; using local fallback:", error);
+  }
+  try { return JSON.parse(localStorage.getItem(K.CAMPAIGNS) || "[]"); } catch { return []; }
 }
 
-export function getCampaignById(id) {
-  return listCampaigns().find(c => c.id === id) || null;
+export async function getCampaignById(id) {
+  const s = supa();
+  if (s) {
+    const { data, error } = await s.from("campaigns").select("*").eq("id", id).maybeSingle();
+    if (!error && data) return data;
+    console.warn("[ReachPoint] getCampaignById Supabase error; using local fallback:", error);
+  }
+  return (JSON.parse(localStorage.getItem(K.CAMPAIGNS) || "[]") || []).find(c => c.id === id) || null;
 }
 
 export async function saveCampaign(campaign) {
-  const arr = listCampaigns();
+  const s = supa();
+  if (s) {
+    const up = {
+      id: campaign.id,
+      name: campaign.name,
+      filters: campaign.filters || [],
+      student_ids: campaign.studentIds || null,
+      reminders: campaign.reminders || null,
+    };
+    const { error } = await s.from("campaigns").upsert(up);
+    if (error) throw error;
+    await listCampaigns(); // refresh local cache
+    return campaign;
+  }
+  // local fallback
+  const arr = JSON.parse(localStorage.getItem(K.CAMPAIGNS) || "[]");
   const i = arr.findIndex(c => c.id === campaign.id);
   if (i >= 0) arr[i] = campaign; else arr.push(campaign);
   localStorage.setItem(K.CAMPAIGNS, JSON.stringify(arr));
@@ -124,7 +146,24 @@ export async function saveCampaign(campaign) {
 }
 
 export async function deleteCampaign(id) {
-  const arr = listCampaigns().filter(c => c.id !== id);
+  const s = supa();
+  if (s) {
+    const { error } = await s.from("campaigns").delete().eq("id", id);
+    if (error) throw error;
+    await listCampaigns(); // refresh local cache
+    return true;
+  }
+  const arr = (JSON.parse(localStorage.getItem(K.CAMPAIGNS) || "[]") || []).filter(c => c.id !== id);
   localStorage.setItem(K.CAMPAIGNS, JSON.stringify(arr));
   return true;
+}
+
+// ---------- Optional: realtime subscription for campaigns ----------
+export function subscribeCampaigns(onChange) {
+  const s = supa();
+  if (!s) return () => {};
+  const ch = s.channel("campaigns-live")
+    .on("postgres_changes", { event: "*", schema: "public", table: "campaigns" }, onChange)
+    .subscribe();
+  return () => s.removeChannel(ch);
 }

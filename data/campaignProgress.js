@@ -1,17 +1,16 @@
 // data/campaignProgress.js
 
 const K = {
-  PROG_PREFIX: "reachpoint.progress.",           // per-campaign object
-  SURVEY_PREFIX: "reachpoint.survey.",           // simple presence marker
+  PROG_PREFIX: "reachpoint.progress.",   // per-campaign object (local cache)
+  SURVEY_PREFIX: "reachpoint.survey.",   // simple presence marker
 };
 
-// Local save/load helpers
-function saveProgress(p) {
-  try { localStorage.setItem(K.PROG_PREFIX + p.campaignId, JSON.stringify(p)); } catch {}
-}
+// ---------- local helpers ----------
+function saveProgress(p) { try { localStorage.setItem(K.PROG_PREFIX + p.campaignId, JSON.stringify(p)); } catch {} }
 function loadProgressLocal(campaignId) {
   try { return JSON.parse(localStorage.getItem(K.PROG_PREFIX + campaignId) || "null"); } catch { return null; }
 }
+function supa() { return (window.hasSupabase && window.hasSupabase()) ? window.supabase : null; }
 
 function defaultContact() {
   return {
@@ -25,21 +24,9 @@ function defaultContact() {
   };
 }
 
-/* ---------------- Supabase helpers ---------------- */
-
-function supaAvailable() { return !!(window.hasSupabase && window.hasSupabase()); }
-
-/**
- * Upsert a single call progress record into table `call_progress`.
- * Schema suggestion:
- *   - campaign_id (text)
- *   - contact_id (text)
- *   - attempts (int)
- *   - outcome (text)        -- 'answered' | 'no_answer' | null
- *   - last_called_at (timestamptz)
- */
+// ---------- Supabase write-through helpers ----------
 async function supaUpsertCallProgress(campaignId, contactId, c) {
-  if (!supaAvailable()) return;
+  const s = supa(); if (!s) return;
   const row = {
     campaign_id: campaignId,
     contact_id:  contactId,
@@ -47,21 +34,13 @@ async function supaUpsertCallProgress(campaignId, contactId, c) {
     outcome:     c.outcome ?? null,
     last_called_at: c.lastCalledAt ? new Date(c.lastCalledAt).toISOString() : null,
   };
-  const { error } = await window.supabase.from("call_progress").upsert(row, { onConflict: "campaign_id,contact_id" });
+  const { error } = await s.from("call_progress").upsert(row, { onConflict: "campaign_id,contact_id" });
   if (error) console.warn("[ReachPoint] call_progress upsert failed:", error);
 }
 
-/**
- * Insert a survey log row (append-only) into `survey_responses`.
- * Schema suggestion:
- *   - campaign_id (text)
- *   - contact_id (text)
- *   - answer (text)
- *   - at (timestamptz)
- */
 async function supaInsertSurveyLog(campaignId, contactId, answer, atMs) {
-  if (!supaAvailable()) return;
-  const { error } = await window.supabase.from("survey_responses").insert({
+  const s = supa(); if (!s) return;
+  const { error } = await s.from("survey_responses").insert({
     campaign_id: campaignId,
     contact_id:  contactId,
     answer:      String(answer ?? ""),
@@ -70,17 +49,9 @@ async function supaInsertSurveyLog(campaignId, contactId, answer, atMs) {
   if (error) console.warn("[ReachPoint] survey_responses insert failed:", error);
 }
 
-/**
- * Insert a note log row (append-only) into `notes`.
- * Schema suggestion:
- *   - campaign_id (text)
- *   - contact_id (text)
- *   - text (text)
- *   - at (timestamptz)
- */
 async function supaInsertNoteLog(campaignId, contactId, text, atMs) {
-  if (!supaAvailable()) return;
-  const { error } = await window.supabase.from("notes").insert({
+  const s = supa(); if (!s) return;
+  const { error } = await s.from("notes").insert({
     campaign_id: campaignId,
     contact_id:  contactId,
     text:        String(text ?? ""),
@@ -89,32 +60,18 @@ async function supaInsertNoteLog(campaignId, contactId, text, atMs) {
   if (error) console.warn("[ReachPoint] notes insert failed:", error);
 }
 
-/**
- * Persist export rows to Supabase.
- * We store each row as JSON for exact fidelity.
- * Tables suggested:
- *   - export_full_rows
- *   - export_not_called_rows
- * Columns:
- *   - campaign_id (text)
- *   - row (jsonb)
- *   - exported_at (timestamptz)
- */
 async function supaInsertExportRows(table, campaignId, rows) {
-  if (!supaAvailable() || !Array.isArray(rows) || !rows.length) return;
+  const s = supa(); if (!s || !Array.isArray(rows) || !rows.length) return;
   const exported_at = new Date().toISOString();
   const payload = rows.map(r => ({ campaign_id: campaignId, row: r, exported_at }));
-  const { error } = await window.supabase.from(table).insert(payload);
+  const { error } = await s.from(table).insert(payload);
   if (error) console.warn(`[ReachPoint] ${table} insert failed:`, error);
 }
 
-/* ---------------- Core progress API (local-first, write-through to Supabase) ---------------- */
-
+// ---------- Core progress API (local-first, write-through to Supabase) ----------
 export async function loadOrInitProgress(campaignId, queueIds = []) {
-  // local first
   const raw = loadProgressLocal(campaignId);
   if (raw) return raw;
-
   const init = {
     campaignId,
     totals: { total: queueIds.length || 0, made: 0, answered: 0, missed: 0 },
@@ -158,12 +115,10 @@ export async function recordSurveyResponse(campaignId, contactId, answer) {
   p.contacts[contactId] = c;
   saveProgress(p);
 
-  // marker (kept from your original code)
   try { localStorage.setItem(K.SURVEY_PREFIX + campaignId, "1"); } catch {}
 
-  // write-through (append-only)
+  // write-through (append-only) + keep progress synced
   supaInsertSurveyLog(campaignId, contactId, answer, at).catch(() => {});
-  // also keep call_progress up to date (attempt count may not change here, but outcome/time might later)
   supaUpsertCallProgress(campaignId, contactId, c).catch(() => {});
   return p;
 }
@@ -201,18 +156,17 @@ export async function getSummary(campaignId) {
   return p.totals || { total: 0, made: 0, answered: 0, missed: 0 };
 }
 
-/* ---------------- CSV helpers + export-row persistence ---------------- */
-
+// ---------- CSV helpers + export-row persistence ----------
 function csvEscape(val) {
   const s = String(val ?? "");
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-/** Exports survey logs as CSV and ALSO stores the exact rows as JSON in `export_full_rows` if you pass them. */
+/** Exports survey logs as CSV and ALSO stores the exact rows in `export_full_rows`. */
 export async function exportSurveyCSV(campaignId) {
   const p = await loadOrInitProgress(campaignId, []);
   const rows = [["contactId","answer","timestamp"]];
-  const jsonRows = []; // for Supabase storage
+  const jsonRows = [];
 
   for (const [id, c] of Object.entries(p.contacts)) {
     if (Array.isArray(c.surveyLogs) && c.surveyLogs.length) {
@@ -228,14 +182,11 @@ export async function exportSurveyCSV(campaignId) {
     }
   }
 
-  // Persist exact rows as JSON if you want this considered a "full" export
-  // (If you prefer a different trigger, call persistFullExportRows from Dashboard instead.)
   supaInsertExportRows("export_full_rows", campaignId, jsonRows).catch(() => {});
-
   return rows.map(r => r.map(csvEscape).join(",")).join("\n");
 }
 
-/** Exports call outcomes as CSV and stores exact rows in `export_full_rows` as well. */
+/** Exports call outcomes as CSV and stores exact rows in `export_full_rows`. */
 export async function exportCallOutcomesCSV(campaignId) {
   const p = await loadOrInitProgress(campaignId, []);
   const rows = [["contactId","outcome","timestamp"]];
@@ -251,10 +202,7 @@ export async function exportCallOutcomesCSV(campaignId) {
   return rows.map(r => r.map(csvEscape).join(",")).join("\n");
 }
 
-/**
- * Build a "Not Called" list with full_name using resolver.
- * We also expose CSV export which persists to `export_not_called_rows`.
- */
+/** "Not Called" list + CSV; also persists exact rows into `export_not_called_rows`. */
 export async function getNotCalledIds(campaignId, queueIds = []) {
   const p = await loadOrInitProgress(campaignId, queueIds);
   const notCalled = [];
@@ -274,26 +222,104 @@ export async function getNotCalled(campaignId, queueIds = [], resolver) {
 
 export async function exportNotCalledCSV(campaignId, queueIds = [], resolver) {
   const rows = await getNotCalled(campaignId, queueIds, resolver);
-  // Persist exact rows as JSON array of objects {contactId, full_name}
   supaInsertExportRows("export_not_called_rows", campaignId, rows).catch(() => {});
-
   const csvRows = [["contactId","full_name"], ...rows.map(r => [r.contactId, r.full_name])];
   return csvRows.map(r => r.map(csvEscape).join(",")).join("\n");
 }
 
-/* ---------------- Optional: let Dashboard persist its own "Full CSV" row set ---------------- */
-
-/**
- * If your Dashboard constructs a richer "Full CSV" (e.g., merges students + progress),
- * call this to store the exact JSON rows you used to build the CSV.
- * `rows` must be an array of plain objects — we store them as-is inside `row` jsonb.
- */
+/** Allow Dashboard to persist its own "Full CSV" merged rows. */
 export async function persistFullExportRows(campaignId, rows) {
   await supaInsertExportRows("export_full_rows", campaignId, Array.isArray(rows) ? rows : []);
 }
 
-/* ---------------- Local helpers for name resolution ---------------- */
+// ---------- Server-backed progress snapshot + realtime (shared state) ----------
+export async function loadProgressSnapshotFromSupabase(campaignId) {
+  const s = supa();
+  if (!s) return null;
 
+  // call progress rows
+  const { data: cp, error: e1 } = await s
+    .from("call_progress")
+    .select("contact_id, attempts, outcome, last_called_at")
+    .eq("campaign_id", campaignId);
+  if (e1) { console.warn("call_progress error", e1); return null; }
+
+  // latest survey per contact
+  let latestSurvey = {};
+  try {
+    const { data: sr, error: e2 } = await s.rpc("get_latest_survey_per_contact", { p_campaign_id: campaignId });
+    if (!e2 && Array.isArray(sr)) {
+      for (const r of sr) latestSurvey[r.contact_id] = r;
+    } else {
+      const { data: allSr } = await s.from("survey_responses").select("contact_id, answer, at").eq("campaign_id", campaignId);
+      for (const r of (allSr || [])) {
+        const prev = latestSurvey[r.contact_id];
+        if (!prev || new Date(r.at) > new Date(prev.at)) latestSurvey[r.contact_id] = r;
+      }
+    }
+  } catch {}
+
+  // latest note per contact
+  const { data: allNotes, error: eN } = await s.from("notes").select("contact_id, text, at").eq("campaign_id", campaignId);
+  const latestNote = {};
+  if (!eN && Array.isArray(allNotes)) {
+    for (const r of allNotes) {
+      const prev = latestNote[r.contact_id];
+      if (!prev || new Date(r.at) > new Date(prev.at)) latestNote[r.contact_id] = r;
+    }
+  }
+
+  // compose
+  const contacts = {};
+  for (const row of (cp || [])) {
+    contacts[row.contact_id] = {
+      attempts: row.attempts || 0,
+      outcome: row.outcome || undefined,
+      lastCalledAt: row.last_called_at ? new Date(row.last_called_at).getTime() : 0,
+      surveyAnswer: latestSurvey[row.contact_id]?.answer || undefined,
+      surveyLogs: [],
+      notes: latestNote[row.contact_id]?.text || "",
+      notesLogs: [],
+    };
+  }
+
+  const ids = Object.keys(contacts);
+  const totals = {
+    total: ids.length,
+    made: ids.filter(id => (contacts[id].attempts || 0) > 0).length,
+    answered: ids.filter(id => contacts[id].outcome === "answered").length,
+    missed: ids.filter(id => contacts[id].outcome === "no_answer").length,
+  };
+
+  return { campaignId, totals, contacts };
+}
+
+export function subscribeToCampaignProgress(campaignId, onChange) {
+  const s = supa();
+  if (!s) return () => {};
+  const ch = s.channel(`progress-${campaignId}`)
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "call_progress", filter: `campaign_id=eq.${campaignId}` },
+      onChange
+    )
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "survey_responses", filter: `campaign_id=eq.${campaignId}` },
+      onChange
+    )
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "notes", filter: `campaign_id=eq.${campaignId}` },
+      onChange
+    )
+    .subscribe();
+  return () => s.removeChannel(ch);
+}
+
+// ---------- Maintenance ----------
+export async function removeProgress(campaignId) {
+  try { localStorage.removeItem(K.PROG_PREFIX + campaignId); } catch {}
+}
+ 
+// ---------- name resolution helpers ----------
 function resolveName(resolver, id) {
   if (!resolver) return "";
   if (typeof resolver === "function") {
@@ -306,7 +332,6 @@ function resolveName(resolver, id) {
   }
   return "";
 }
-
 function pickName(val) {
   if (val == null) return "";
   if (typeof val === "string") return val.trim();
@@ -320,15 +345,8 @@ function pickName(val) {
   }
   return String(val || "").trim();
 }
-
 function joinNames(first, last) {
   const a = String(first || "").trim();
   const b = String(last || "").trim();
   return (a + " " + b).trim();
-}
-
-/* ---------------- Maintenance ---------------- */
-
-export async function removeProgress(campaignId) {
-  try { localStorage.removeItem(K.PROG_PREFIX + campaignId); } catch {}
 }
