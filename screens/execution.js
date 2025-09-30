@@ -2,12 +2,20 @@
 import { getAllStudents, applyFilters, getStudentId } from '../data/campaignsData.js';
 
 import {
+  // server-first reads
   loadProgressSnapshotFromSupabase,
   subscribeToCampaignProgress,
+  // writes
   recordOutcome,
   recordSurveyResponse,
-  recordNote
+  recordNote,
+  // missing reads you’re using below
+  loadOrInitProgress,
+  getSurveyResponse,
+  getNote,
+  getSummary,
 } from "../data/campaignProgress.js";
+
 
 
 export async function Execute(root, campaign) {
