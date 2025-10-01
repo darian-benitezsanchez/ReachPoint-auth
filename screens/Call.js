@@ -7,6 +7,10 @@ export async function Call(root) {
   root.innerHTML = '';
   const wrap = div('');
 
+  // --- connection status chip ---
+  const supaClient = supa();
+  const statusChip = connChip(supaClient ? 'Connected to Supabase' : 'Offline mode (local save)', !!supaClient);
+
   // --- load students once ---
   let students = [];
   try {
@@ -28,7 +32,7 @@ export async function Call(root) {
   let caller = '';     // Karla | Aracely | Darian
   let notes = '';
 
-  // --- UI: search box with suggestions ---
+  // --- UI header + search ---
   const header = div('callHeader',
     h1('Make a Call'),
     ptext('Search for a student by full name. Click a result to open the call details.', 'muted')
@@ -38,12 +42,16 @@ export async function Call(root) {
   const resultsBox = div('resultsBox'); // suggestion list
   const callPane = div('callPane');     // where we render call UI
 
+  // Recent calls wrapper (we keep a reference so we can refresh it on save)
+  const recentWrap = div('recentWrap', h2('Recent Calls', 'recentTitle'));
+  const recentListMount = div('recentMount'); // where list gets rendered
+  recentWrap.append(recentListMount);
+
   searchInput.addEventListener('input', () => {
     const q = normalize(searchInput.value);
     renderSuggestions(q);
   });
   searchInput.addEventListener('keydown', (e) => {
-    // enter to select first visible suggestion
     if (e.key === 'Enter') {
       const first = resultsBox.querySelector('.resultItem');
       if (first) first.click();
@@ -89,17 +97,49 @@ export async function Call(root) {
       alert('Please select your name before saving.');
       return;
     }
+
+    const payload = {
+      studentId: selected.id,
+      full_name: selected.full_name,
+      caller,
+      notes,
+      at: Date.now()
+    };
+
     try {
-      await recordSingleCall({
-        studentId: selected.id,
-        full_name: selected.full_name,
-        caller,
-        notes,
-        at: Date.now()
-      });
+      if (supaClient) {
+        // ---- Supabase path ----
+        const { data: userData } = await supaClient.auth.getUser();
+        const userId = userData?.user?.id ?? null;
+
+        const row = {
+          student_id: String(payload.studentId),
+          full_name: String(payload.full_name || ''),
+          caller: String(payload.caller || ''),
+          notes: String(payload.notes || ''),
+          occurred_at: new Date(payload.at).toISOString(),
+          created_by: userId
+        };
+
+        const { error } = await supaClient.from('single_calls').insert(row);
+        if (error) throw error;
+      } else {
+        // ---- Fallback to local helper (no Supabase available) ----
+        await recordSingleCall(payload);
+      }
+
       alert('Call saved.');
-      // keep the selected pane visible; user may add more notes if needed
+
+      // Optional UX: clear notes box but keep the student selection visible
+      notes = '';
+      const ta = callPane.querySelector('textarea');
+      if (ta) ta.value = '';
+
+      // 🔄 Auto-refresh the Recent Calls list after save
+      await refreshRecentCalls();
+
     } catch (e) {
+      console.error(e);
       alert('Save failed: ' + (e?.message || e));
     }
   }
@@ -130,6 +170,10 @@ export async function Call(root) {
     phoneEl.style.textAlign = 'center';
     const phoneWrap = div('', { textAlign: 'center', marginTop: '6px', marginBottom:'10px' });
     phoneWrap.append(phoneEl);
+
+    // Connection chip inline with name
+    const chipWrap = div('', { display: 'flex', justifyContent: 'center', margin: '4px 0 10px' });
+    chipWrap.append(statusChip.cloneNode(true)); // simple visual indicator
 
     // Caller dropdown
     const callerLabel = div('kv', div('k', 'Your name'), div('v'));
@@ -171,6 +215,7 @@ export async function Call(root) {
 
     callPane.append(
       nameEl,
+      chipWrap,
       phoneWrap,
       detailsCard,
       callerLabel,
@@ -182,14 +227,68 @@ export async function Call(root) {
   // initial structure
   wrap.append(
     header,
+    statusChip,
     div('', searchInput),
     resultsBox,
-    callPane
+    callPane,
+    recentWrap
   );
 
   root.append(wrap);
 
-  /* ------------ tiny helpers (mostly mirrored from execution) ------------ */
+  // ────────────────── Recent Calls (auto-refreshing) ──────────────────
+  async function loadRecentCalls() {
+    const client = supa();
+    if (!client) return []; // if offline, we show empty (or you can wire local history here)
+
+    const { data, error } = await client
+      .from('single_calls')
+      .select('*')
+      .order('occurred_at', { ascending: false })
+      .limit(20);
+
+    if (error) {
+      console.error('Failed to load calls:', error);
+      return [];
+    }
+    return data || [];
+  }
+
+  async function refreshRecentCalls() {
+    recentListMount.innerHTML = '';
+    const calls = await loadRecentCalls();
+
+    if (!calls.length) {
+      recentListMount.append(ptext('No calls recorded yet.', 'muted'));
+      return;
+    }
+
+    for (const c of calls) {
+      const row = div('callRow');
+      const when = c.occurred_at ? new Date(c.occurred_at).toLocaleString() : '';
+      row.append(
+        div('callCell', c.full_name || ''),
+        div('callCell', `📞 ${c.caller || ''}`),
+        div('callCell', when),
+        div('callCell notes', c.notes || '')
+      );
+      recentListMount.append(row);
+    }
+  }
+
+  // initial load of recent calls (if online)
+  refreshRecentCalls();
+
+  /* ------------------------ persistence / supabase ------------------------ */
+  function supa() {
+    try {
+      if (window.hasSupabase && window.hasSupabase()) return window.supabase;
+      if (window.supabase) return window.supabase; // fallback if hasSupabase() not present
+    } catch {}
+    return null;
+  }
+
+  /* ----------------- tiny helpers (mirrored from execution) --------------- */
   function deriveFullName(stu) {
     const cands = [
       String(stu?.full_name || '').trim(),
@@ -202,6 +301,14 @@ export async function Call(root) {
       String(stu?.['Full Name']||'').trim(),
     ].filter(Boolean);
     return cands[0] || 'Unknown';
+  }
+
+  function normalize(s) {
+    return String(s || '')
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
   }
 
   function cleanDigits(s) {
@@ -314,12 +421,26 @@ export async function Call(root) {
     const pre = document.createElement('pre');
     pre.style.whiteSpace='pre-wrap';
     pre.style.background='#1a1f2b';
-    pre.style.border='1px solid #2b3b5f';
+    pre.style.border = '1px solid #2b3b5f';
     pre.style.padding='12px';
     pre.style.borderRadius='8px';
     pre.textContent = (err && (err.stack || err.message)) || String(err);
     const box = div('', { padding:'16px', color:'#ffb3b3' });
     box.append(h2('⚠️ Call screen error'), pre);
     return box;
+  }
+  function connChip(text, ok){
+    const n = document.createElement('span');
+    n.textContent = text;
+    n.style.display = 'inline-block';
+    n.style.padding = '4px 10px';
+    n.style.borderRadius = '999px';
+    n.style.fontSize = '12px';
+    n.style.fontWeight = '700';
+    n.style.margin = '6px 0 10px';
+    n.style.background = ok ? '#e6f6ee' : '#fff4e5';
+    n.style.color = ok ? '#0f5132' : '#7a3e00';
+    n.style.border = ok ? '1px solid #bfe9d3' : '1px solid #ffd8a8';
+    return n;
   }
 }
