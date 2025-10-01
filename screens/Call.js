@@ -42,9 +42,9 @@ export async function Call(root) {
   const resultsBox = div('resultsBox'); // suggestion list
   const callPane = div('callPane');     // where we render call UI
 
-  // Recent calls wrapper (we keep a reference so we can refresh it on save)
+  // Recent calls wrapper (keep reference so we can refresh it after save)
   const recentWrap = div('recentWrap', h2('Recent Calls', 'recentTitle'));
-  const recentListMount = div('recentMount'); // where list gets rendered
+  const recentListMount = div('recentMount');
   recentWrap.append(recentListMount);
 
   searchInput.addEventListener('input', () => {
@@ -62,7 +62,7 @@ export async function Call(root) {
     resultsBox.innerHTML = '';
     if (!q) return;
 
-    const MAX = 12;
+    const MAX = 20;
     const matches = index
       .filter(x => normalize(x.full_name).includes(q))
       .slice(0, MAX);
@@ -73,8 +73,11 @@ export async function Call(root) {
     }
 
     for (const m of matches) {
-      const row = div('resultItem', m.full_name);
+      const row = div('resultItem');
       row.tabIndex = 0;
+      row.setAttribute('role', 'button');
+      row.style.cursor = 'pointer';
+      row.append(document.createTextNode(m.full_name));
       row.onclick = () => { onPickStudent(m); };
       row.onkeydown = (e)=>{ if (e.key==='Enter' || e.key===' ') onPickStudent(m); };
       resultsBox.append(row);
@@ -173,7 +176,7 @@ export async function Call(root) {
 
     // Connection chip inline with name
     const chipWrap = div('', { display: 'flex', justifyContent: 'center', margin: '4px 0 10px' });
-    chipWrap.append(statusChip.cloneNode(true)); // simple visual indicator
+    chipWrap.append(statusChip.cloneNode(true));
 
     // Caller dropdown
     const callerLabel = div('kv', div('k', 'Your name'), div('v'));
@@ -211,7 +214,7 @@ export async function Call(root) {
       button('Save Call','btn btn-primary', onSave)
     );
 
-    const detailsCard = details(stu); // optional: show all fields like execution screen
+    const detailsCard = details(stu); // show all fields
 
     callPane.append(
       nameEl,
@@ -239,7 +242,7 @@ export async function Call(root) {
   // ────────────────── Recent Calls (auto-refreshing) ──────────────────
   async function loadRecentCalls() {
     const client = supa();
-    if (!client) return []; // if offline, we show empty (or you can wire local history here)
+    if (!client) return [];
 
     const { data, error } = await client
       .from('single_calls')
@@ -345,6 +348,14 @@ export async function Call(root) {
       window.location.href = href;
     });
     return a;
+  }
+  function disabledBtn(label = 'Unavailable') {
+    const n = document.createElement('span');
+    n.textContent = label;
+    n.className = 'callBtn disabled';
+    n.style.opacity = '.6';
+    n.style.pointerEvents = 'none';
+    return n;
   }
 
   function phoneLinkOrText(val) {
