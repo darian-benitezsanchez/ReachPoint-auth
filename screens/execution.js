@@ -1,5 +1,10 @@
 // screens/execution.js
-import { getAllStudents, applyFilters, getStudentId } from '../data/campaignsData.js';
+import {
+  getAllStudents,
+  applyFilters,
+  getStudentId,
+  getCampaignById, // <-- import hydrate helper
+} from '../data/campaignsData.js';
 
 import {
   // server-first reads
@@ -16,8 +21,35 @@ import {
   getSummary,
 } from "../data/campaignProgress.js";
 
-export async function Execute(root, campaign) {
-  if (!campaign) { location.hash = '#/dashboard'; return; }
+/* ------------ tiny hash helper: #/execute/<id> ------------- */
+function hashCampaignId() {
+  try {
+    const m = (location.hash || '').match(/#\/execute\/([^/?#]+)/i);
+    return m ? decodeURIComponent(m[1]) : null;
+  } catch { return null; }
+}
+
+/* ------------ robust campaign hydration -------------------- */
+async function resolveCampaign(campaignMaybe) {
+  // If a Promise was passed accidentally, await it.
+  if (campaignMaybe && typeof campaignMaybe.then === 'function') {
+    campaignMaybe = await campaignMaybe;
+  }
+  // If we have a valid id + name/filters, use as-is.
+  if (campaignMaybe?.id && (campaignMaybe.name || campaignMaybe.filters || campaignMaybe.student_ids)) {
+    return campaignMaybe;
+  }
+  // Otherwise fetch from Supabase/local cache using id from arg or URL.
+  const id = campaignMaybe?.id || hashCampaignId();
+  if (!id) return null;
+  const fresh = await getCampaignById(id);
+  // Fall back to minimal shape if not found so UI can still show an error.
+  return fresh || { id, name: '(unknown)', filters: [], student_ids: null };
+}
+
+export async function Execute(root, campaignInput) {
+  const campaign = await resolveCampaign(campaignInput);
+  if (!campaign?.id) { location.hash = '#/dashboard'; return; }
 
   root.innerHTML = '';
   const wrap = document.createElement('div');
@@ -46,7 +78,7 @@ export async function Execute(root, campaign) {
     filtered = applyFilters(students, campaign.filters || []);
 
     // 2) Intersect with campaign.student_ids if present
-    //    Accept either true DB ids (uuid) OR the app's derived ids (first-last-idx).
+    //    Accept either real DB ids (id/student_id/uuid) OR the app’s derived ids (first-last-idx).
     const studentIds = (() => {
       const sids = campaign.student_ids;
       if (!sids) return null;
