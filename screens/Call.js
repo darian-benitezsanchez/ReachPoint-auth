@@ -153,8 +153,8 @@ export async function Call(root) {
 
     const stu = selected.ref || {};
     const phone =
-      stu['Mobile Phone*'] ??
-      stu['Mobile Number*'] ??
+      stu['mobile_phone'] ??
+      stu['mobile_phone'] ??
       stu.mobile ??
       stu.phone_number ??
       stu.phone ??
