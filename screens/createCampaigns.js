@@ -58,7 +58,7 @@ export function CreateCampaign(root) {
             op = v;
           })
         ),
-        valueWithSuggestions(),
+        valueWithSuggestions(), // 👈 suggestions now live directly under the input row
         chips(filters.map((f, i) => chip(`${f.field} ${f.op} ${f.value}`, () => { filters.splice(i, 1); render(); }))),
         status(`${applyFilters(students, filters).length} match${applyFilters(students, filters).length === 1 ? '' : 'es'}`),
         btn('Next: Optional call question', 'btn btn-primary', () => {
@@ -147,32 +147,53 @@ export function CreateCampaign(root) {
     render();
   }
 
-  /* ----- Suggestions ----- */
+  /* ----- Suggestions (rendered below input) ----- */
   let suggestEl = null;
+  let valueInputRef = null;
+
   function valueWithSuggestions() {
     const wrapDiv = div('suggest-host');
+    wrapDiv.style.display = 'flex';
+    wrapDiv.style.flexDirection = 'column';
+
+    // row: [ value input | Add button ]
     const inp = input({
       placeholder: 'value',
       oninput: e => { value = e.target.value; showSuggest(); },
       onfocus: showSuggest,
       onblur: () => setTimeout(hideSuggest, 120)
     });
+    valueInputRef = inp;
     inp.style.flex = '1';
+
     const add = btn('Add', 'btn', () => {
       if (!field || !op || !String(value).trim()) return;
       filters.push({ field, op, value });
       value = '';
+      if (valueInputRef) valueInputRef.value = '';
+      hideSuggest();
       render();
     });
+
     const rowEl = row(inp, add);
     rowEl.style.marginBottom = '8px';
     wrapDiv.append(rowEl);
 
-    const sug = div('suggestWrap', suggestCard());
-    suggestEl = sug;
-    wrapDiv.append(sug);
+    // suggestions container (always below the row)
+    const sugWrap = div('suggestWrap', suggestCard());
+    // ensure it's visually “attached” to the input area
+    sugWrap.style.marginTop = '0';
+    sugWrap.style.position = 'static';
+    sugWrap.style.width = '100%';
+
+    suggestEl = sugWrap;
+    wrapDiv.append(sugWrap);
+
+    // show initial suggestions for current field (empty filter -> top values)
+    showSuggest();
     return wrapDiv;
   }
+
   function showSuggest() {
     if (!suggestEl) return;
     const pool = valuesByField.get(field) || [];
@@ -181,16 +202,32 @@ export function CreateCampaign(root) {
     suggestEl.innerHTML = '';
     suggestEl.append(suggestCard(items));
   }
+
   function hideSuggest() { if (suggestEl) suggestEl.innerHTML = ''; }
+
   function suggestCard(items = []) {
     const card = div('suggestCard');
+
+    // make sure this is a normal flowing block under the input
+    card.style.position = 'static';
+    card.style.marginTop = '0';
+
     const scroller = document.createElement('div');
     scroller.style.maxHeight = '240px';
     scroller.style.overflow = 'auto';
+
     if (!items.length) scroller.append(div('suggestEmpty', 'No suggestions'));
+
     for (const val of items) {
       const it = div('suggestItem', val);
-      it.onclick = () => { value = val; hideSuggest(); render(); };
+      it.onclick = () => {
+        // fill the input without re-rendering the page
+        value = val;
+        if (valueInputRef) valueInputRef.value = val;
+        hideSuggest();
+        // keep focus on the input for quick "Enter"
+        if (valueInputRef) valueInputRef.focus();
+      };
       scroller.append(it);
     }
     card.append(scroller);
@@ -208,7 +245,7 @@ export function CreateCampaign(root) {
     return out;
   }
 
-  // 🔧 this was missing and caused the crash
+  // 🔧 helper
   function status(text) { const n = document.createElement('div'); n.className = 'muted'; n.style.margin = '6px 0 2px'; n.textContent = text; return n; }
 
   function h1(t) { const n = document.createElement('h1'); n.className = 'title'; n.textContent = t; return n; }
