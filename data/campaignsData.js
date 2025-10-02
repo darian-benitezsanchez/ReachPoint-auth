@@ -16,6 +16,12 @@ export function toISODate(d) {
 }
 function supa() { return (window.hasSupabase && window.hasSupabase()) ? window.supabase : null; }
 
+// Safely JSON-parse only if the value is a string
+function maybeParseJSON(v) {
+  if (typeof v !== 'string') return v;
+  try { return JSON.parse(v); } catch { return v; }
+}
+
 // ---------- student helpers ----------
 /** Derive a stable student id from row + position (compatible with your app) */
 export function getStudentId(student, idx) {
@@ -102,45 +108,85 @@ export async function getAllStudents() {
 export async function listCampaigns() {
   const s = supa();
   if (s) {
-    const { data, error } = await s.from("campaigns").select("*").order("created_at", { ascending: false });
+    const { data, error } = await s
+      .from("campaigns")
+      .select("*")
+      .order("created_at", { ascending: false });
+
     if (!error && Array.isArray(data)) {
-      try { localStorage.setItem(K.CAMPAIGNS, JSON.stringify(data)); } catch {}
-      return data;
+      // Normalize any stringified JSON columns
+      const normalized = data.map(c => ({
+        ...c,
+        filters: maybeParseJSON(c.filters),
+        student_ids: maybeParseJSON(c.student_ids),
+        reminders: maybeParseJSON(c.reminders),
+        survey: maybeParseJSON(c.survey),
+      }));
+      try { localStorage.setItem(K.CAMPAIGNS, JSON.stringify(normalized)); } catch {}
+      return normalized;
     }
     console.warn("[ReachPoint] listCampaigns Supabase error; using local fallback:", error);
   }
-  try { return JSON.parse(localStorage.getItem(K.CAMPAIGNS) || "[]"); } catch { return []; }
+  try {
+    const arr = JSON.parse(localStorage.getItem(K.CAMPAIGNS) || "[]");
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
 }
 
 export async function getCampaignById(id) {
   const s = supa();
   if (s) {
     const { data, error } = await s.from("campaigns").select("*").eq("id", id).maybeSingle();
-    if (!error && data) return data;
+    if (!error && data) {
+      // Normalize any stringified JSON columns
+      data.filters = maybeParseJSON(data.filters);
+      data.student_ids = maybeParseJSON(data.student_ids);
+      data.reminders = maybeParseJSON(data.reminders);
+      data.survey = maybeParseJSON(data.survey);
+      return data;
+    }
     console.warn("[ReachPoint] getCampaignById Supabase error; using local fallback:", error);
   }
-  return (JSON.parse(localStorage.getItem(K.CAMPAIGNS) || "[]") || []).find(c => c.id === id) || null;
+  const local = (JSON.parse(localStorage.getItem(K.CAMPAIGNS) || "[]") || []).find(c => c.id === id) || null;
+  if (local) {
+    local.filters = maybeParseJSON(local.filters);
+    local.student_ids = maybeParseJSON(local.student_ids);
+    local.reminders = maybeParseJSON(local.reminders);
+    local.survey = maybeParseJSON(local.survey);
+  }
+  return local;
 }
 
 export async function saveCampaign(campaign) {
   const s = supa();
   if (s) {
+    // ✅ include survey so Execute can render chips
     const up = {
       id: campaign.id,
       name: campaign.name,
       filters: campaign.filters || [],
       student_ids: campaign.studentIds || null,
       reminders: campaign.reminders || null,
+      survey: campaign.survey || null,   // <-- added
     };
     const { error } = await s.from("campaigns").upsert(up);
     if (error) throw error;
-    await listCampaigns(); // refresh local cache
+    await listCampaigns(); // refresh local cache w/ normalized rows
     return campaign;
   }
   // local fallback
   const arr = JSON.parse(localStorage.getItem(K.CAMPAIGNS) || "[]");
+  const next = { ...campaign };
+  // keep local shape consistent
+  next.filters = next.filters || [];
+  next.student_ids = next.studentIds || null;
+  // ensure local copy stores survey too
+  next.survey = next.survey || null;
+
   const i = arr.findIndex(c => c.id === campaign.id);
-  if (i >= 0) arr[i] = campaign; else arr.push(campaign);
+  if (i >= 0) arr[i] = next; else arr.push(next);
   localStorage.setItem(K.CAMPAIGNS, JSON.stringify(arr));
   return campaign;
 }
