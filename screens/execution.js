@@ -222,8 +222,7 @@ export async function Execute(root, campaignInput) {
     }
   }
 
-  // ======= NO SWIPE: remove all gesture handlers; buttons only =======
-  // (Intentionally no attachSwipe / pointer handlers.)
+  // ======= NO SWIPE: buttons only =======
 
   // ======= Lazy-load current contact's survey & notes =======
   async function ensureSurveyAndNotesLoaded() {
@@ -247,7 +246,8 @@ export async function Execute(root, campaignInput) {
     );
   }
 
-  function render() {
+  // ─── render is async so survey/notes are present BEFORE drawing ───
+  async function render() {
     try {
       wrap.innerHTML = '';
       wrap.append(header());
@@ -274,7 +274,9 @@ export async function Execute(root, campaignInput) {
       }
 
       if ((mode==='running' || mode==='missed') && currentId){
-        ensureSurveyAndNotesLoaded();
+        // ⬇️ wait for survey+notes before building UI
+        await ensureSurveyAndNotesLoaded();
+
         const stu = idToStudent[currentId] || {};
         const card = div('', { padding: '16px', paddingBottom:'36px' });
 
@@ -396,7 +398,6 @@ export async function Execute(root, campaignInput) {
           }
         }
       }
-      // fuzzy contains if exact not found
       for (const key of Object.keys(stu||{})) {
         for (const alias of variants) {
           if (key.toLowerCase().includes(alias.toLowerCase())) {
@@ -423,10 +424,8 @@ export async function Execute(root, campaignInput) {
     const summaryRows = [];
     if (schoolVal) summaryRows.push(['School', schoolVal.val]);
     if (gradeVal)  summaryRows.push(['Grade', gradeVal.val]);
-
-    // Contact row blocks
-    if (phoneVal) summaryRows.push(['Phone', phoneLinkOrText(phoneVal.val)]);
-    if (emailVal) summaryRows.push(['Email', emailLink(emailVal.val)]);
+    if (phoneVal)  summaryRows.push(['Phone', phoneLinkOrText(phoneVal.val)]);
+    if (emailVal)  summaryRows.push(['Email', emailLink(emailVal.val)]);
 
     if (parentName || parentPhone || parentEmail) {
       const lines = [];
@@ -437,11 +436,8 @@ export async function Execute(root, campaignInput) {
     }
 
     const addressParts = [addr?.val, city?.val, [state?.val, zip?.val].filter(Boolean).join(' ')].filter(Boolean);
-    if (addressParts.length) {
-      summaryRows.push(['Address', addressParts.join(', ')]);
-    }
+    if (addressParts.length) summaryRows.push(['Address', addressParts.join(', ')]);
 
-    // Build summary card
     const card = div('detailsCard');
     card.style.width = '100%';
 
@@ -451,12 +447,11 @@ export async function Execute(root, campaignInput) {
       const vCell = div('v');
       if (vNodeOrText instanceof Node) vCell.append(vNodeOrText);
       else if (typeof vNodeOrText === 'string') vCell.textContent = vNodeOrText;
-      else vCell.append(vNodeOrText); // can be fragment
+      else vCell.append(vNodeOrText);
       row.append(vCell);
       card.append(row);
     }
 
-    // Remaining fields (expandable)
     const knownKeys = new Set(
       [phoneVal,emailVal,schoolVal,gradeVal,parentName,parentPhone,parentEmail,addr,city,state,zip]
         .filter(Boolean)
@@ -491,13 +486,11 @@ export async function Execute(root, campaignInput) {
       card.append(det);
     }
 
-    // Top call button (if we have a phone)
     const topBtnWrap = div('', { display:'flex', justifyContent:'center', margin:'8px 0 12px' });
     const phoneRaw = phoneVal?.val || '';
     const callBtnNode = phoneRaw ? callButton(phoneRaw) : disabledBtn('No phone number');
     topBtnWrap.append(callBtnNode);
 
-    // Return assembled block
     const outer = div('', { maxWidth:'900px', margin:'0 auto' });
     outer.append(topBtnWrap, card);
     return outer;
@@ -507,7 +500,9 @@ export async function Execute(root, campaignInput) {
   function surveyBlock(survey, sel, onPick){
     if (!survey || !survey.question || !Array.isArray(survey.options) || !survey.options.length) return div('');
     const options = survey.options.map(opt => {
-      const c = chip(opt, 'surveyChip'+(sel===opt?' sel':''), ()=>onPick(opt));
+      const isSel = sel === opt;
+      const c = chip(opt, 'surveyChip' + (isSel ? ' sel' : ''), ()=>onPick(opt));
+      c.setAttribute('aria-pressed', String(isSel));
       return c;
     });
     const box = div('surveyCard',
