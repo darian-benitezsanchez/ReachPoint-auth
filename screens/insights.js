@@ -12,7 +12,7 @@ import {
   loadOrInitProgress
 } from "../data/campaignProgress.js";
 
-// ---------- tiny DOM helpers ----------
+/* ------------- tiny DOM helpers ------------- */
 function div(cls, style = {}) {
   const n = document.createElement('div');
   if (cls) n.className = cls;
@@ -42,14 +42,13 @@ function destroyChart(maybe) {
   }
 }
 
-// ---------- data helpers ----------
+/* ------------- data helpers ------------- */
 function pickName(stu) {
   if (!stu) return '';
   const a = String(stu.first_name || '').trim();
   const b = String(stu.last_name || '').trim();
   const fallback = stu.full_name || stu.fullName || stu['Full Name*'] || '';
-  const full = (a || b) ? `${a} ${b}`.trim() : String(fallback || '').trim();
-  return full;
+  return (a || b) ? `${a} ${b}`.trim() : String(fallback || '').trim();
 }
 function getGradYear(stu) {
   const keys = [
@@ -73,16 +72,35 @@ function toDateSafe(ts) {
   } catch { return null; }
 }
 
-// Build the same queueIds & id->student map execution uses
+/** Build the *same* queue + id->student map as Execute, including intersection with student_ids */
 function buildQueueMap(students, campaign) {
-  const filtered = applyFilters(students, campaign?.filters || []);
+  let filtered = applyFilters(students, campaign?.filters || []);
+
+  // Intersect with campaign.student_ids/studentIds if present (mirror of Execute)
+  const rawIds = campaign?.student_ids ?? campaign?.studentIds ?? null;
+  let studentIds = null;
+  if (Array.isArray(rawIds)) {
+    studentIds = rawIds.map(String);
+  } else if (typeof rawIds === 'string') {
+    try {
+      const arr = JSON.parse(rawIds);
+      if (Array.isArray(arr)) studentIds = arr.map(String);
+    } catch {}
+  }
+
+  if (studentIds && studentIds.length) {
+    const set = new Set(studentIds);
+    const primaryKey = (s) => String(s?.id ?? s?.student_id ?? s?.uuid ?? '');
+    filtered = filtered.filter((s, i) => set.has(primaryKey(s)) || set.has(getStudentId(s, i)));
+  }
+
   const queueIds = filtered.map((s, i) => getStudentId(s, i));
   const idToStudent = {};
   filtered.forEach((s, i) => { idToStudent[getStudentId(s, i)] = s; });
   return { queueIds, idToStudent };
 }
 
-// Flatten progress.contacts into activity rows (compatible with your progress shape)
+/** Flatten progress.contacts into chartable rows */
 function extractRowsForCampaign(progress, idToStudent, campaignMeta) {
   const rows = [];
   const contacts = progress?.contacts || {};
@@ -93,6 +111,7 @@ function extractRowsForCampaign(progress, idToStudent, campaignMeta) {
     const response = c?.surveyAnswer ?? c?.outcome ?? null;
     const notes = String(c?.notes ?? '');
 
+    // prefer surveyLogs last timestamp, else lastCalledAt
     let ts = c?.lastCalledAt || 0;
     if (Array.isArray(c?.surveyLogs) && c.surveyLogs.length > 0) {
       const last = c.surveyLogs[c.surveyLogs.length - 1];
@@ -113,7 +132,7 @@ function extractRowsForCampaign(progress, idToStudent, campaignMeta) {
   return rows;
 }
 
-// ---------- charts logic ----------
+/* ------------- charts ------------- */
 function overallResponseBar(ctx, counts) {
   const labels = Object.keys(counts);
   const data = labels.map(k => counts[k]);
@@ -178,7 +197,7 @@ function responsesByDOWLine(ctx, rows) {
   });
 }
 
-// ---------- main screen ----------
+/* ------------- main screen ------------- */
 export async function Insights(root) {
   // layout shell
   root.innerHTML = '';
@@ -262,21 +281,21 @@ export async function Insights(root) {
   let students = [];
   let campaignList = [];
 
-  // Load base data
+  // Load base data (Supabase-first via campaignsData helpers)
   try {
     students = await getAllStudents();
   } catch (e) {
     console.error('Insights: failed to load students', e);
   }
   try {
-    const allCampaigns = await listCampaigns();            // <-- await it
+    const allCampaigns = await listCampaigns();
     campaignList = Array.isArray(allCampaigns) ? allCampaigns : [];
   } catch (e) {
     console.error('Insights: failed to list campaigns', e);
     campaignList = [];
   }
 
-  // Active campaigns
+  // Active campaigns (default to all if you don't track "active")
   const activeCampaigns = campaignList.filter(c => c?.active !== false);
 
   // Populate dropdown
@@ -299,16 +318,16 @@ export async function Insights(root) {
   async function renderForCampaign(campaignId) {
     if (!campaignId) return;
 
-    const campaign = await getCampaignById(campaignId);    // <-- await it
+    const campaign = await getCampaignById(campaignId); // Supabase-first
     if (!campaign) {
       console.warn('Insights: campaign not found', campaignId);
       return;
     }
 
-    // Rebuild queue + id map just like the execution screen does
+    // Build queue like Execute (includes intersection with student_ids)
     const { queueIds, idToStudent } = buildQueueMap(students, campaign);
 
-    // Prefer shared/server progress; fallback to local snapshot
+    // Prefer shared/server progress; fallback to local
     let progress = null;
     try {
       const snap = await loadProgressSnapshotFromSupabase(campaign.id);
@@ -318,46 +337,34 @@ export async function Insights(root) {
       progress = await loadOrInitProgress(campaign.id, queueIds);
     }
 
-    // Build normalized rows for the charts/table
+    // Derive rows for charts
     const rows = extractRowsForCampaign(progress, idToStudent, { id: campaign.id, name: campaign.name });
 
-    // ---- Descriptive: overall response ----
+    // Tally outcomes/survey answers
     const counts = {};
     for (const r of rows) {
       const key = (r.response ?? 'unknown').toString();
       counts[key] = (counts[key] || 0) + 1;
     }
 
+    // Rebuild charts
     destroyChart(charts.overall);
-    charts.overall = overallResponseBar(
-      document.getElementById('overallResponsesChart').getContext('2d'),
-      counts
-    );
-
-    // ---- Descriptive: answered by graduation year (pie) ----
     destroyChart(charts.gy);
-    charts.gy = answeredByGradYearPie(
-      document.getElementById('responsesByGradYearChart').getContext('2d'),
-      rows,
-      idToStudent
-    );
-
-    // ---- Call statistics: by hour of day ----
     destroyChart(charts.hour);
-    charts.hour = responsesByHourLine(
-      document.getElementById('responsesByHourChart').getContext('2d'),
-      rows
-    );
-
-    // ---- Call statistics: by day of week ----
     destroyChart(charts.dow);
-    charts.dow = responsesByDOWLine(
-      document.getElementById('responsesByDOWChart').getContext('2d'),
-      rows
-    );
+
+    const overallCtx = document.getElementById('overallResponsesChart')?.getContext('2d');
+    const gyCtx      = document.getElementById('responsesByGradYearChart')?.getContext('2d');
+    const hourCtx    = document.getElementById('responsesByHourChart')?.getContext('2d');
+    const dowCtx     = document.getElementById('responsesByDOWChart')?.getContext('2d');
+
+    if (overallCtx) charts.overall = overallResponseBar(overallCtx, counts);
+    if (gyCtx)      charts.gy      = answeredByGradYearPie(gyCtx, rows, idToStudent);
+    if (hourCtx)    charts.hour    = responsesByHourLine(hourCtx, rows);
+    if (dowCtx)     charts.dow     = responsesByDOWLine(dowCtx, rows);
   }
 
-  // initial
+  // initial render
   if (activeCampaigns.length > 0) {
     await renderForCampaign(activeCampaigns[0].id);
   }
