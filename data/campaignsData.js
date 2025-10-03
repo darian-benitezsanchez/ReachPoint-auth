@@ -55,11 +55,6 @@ export function applyFilters(rows, filters) {
 }
 
 // ---------- Students: Supabase-first with graceful fallback ----------
-/**
- * Attempts to read from Supabase table `students`.
- * - If available, returns full array and refreshes local cache.
- * - If offline or error, falls back to cache, then to ./data/students.json file.
- */
 export async function getAllStudents() {
   try {
     const s = supa();
@@ -104,6 +99,53 @@ export async function getAllStudents() {
   return [];
 }
 
+/* -------------------- Normalization helpers -------------------- */
+function normalizeRowFromDB(row) {
+  // Parse any stringified JSON (defensive)
+  const filters   = maybeParseJSON(row.filters)     ?? [];
+  const studentIDs= maybeParseJSON(row.student_ids) ?? [];
+  const reminders = maybeParseJSON(row.reminders)   ?? [];
+  const survey    = maybeParseJSON(row.survey)      ?? null;
+
+  // Return both camelCase and snake_case for backwards compatibility
+  return {
+    id: row.id,
+    name: row.name,
+    createdAt: row.created_at ?? row.createdAt ?? null,
+    updatedAt: row.updated_at ?? row.updatedAt ?? null,
+
+    // camelCase the app prefers
+    filters,
+    studentIds: studentIDs,
+    reminders,
+    survey,
+
+    // keep snake_case a copy so legacy code (execution.js) that reads student_ids still works
+    student_ids: studentIDs
+  };
+}
+
+function normalizeRowFromLocal(row) {
+  const filters   = maybeParseJSON(row.filters)                 ?? [];
+  const studentIDs= maybeParseJSON(row.studentIds ?? row.student_ids) ?? [];
+  const reminders = maybeParseJSON(row.reminders)               ?? [];
+  const survey    = maybeParseJSON(row.survey)                  ?? null;
+
+  return {
+    id: row.id,
+    name: row.name,
+    createdAt: row.createdAt ?? null,
+    updatedAt: row.updatedAt ?? null,
+
+    filters,
+    studentIds: studentIDs,
+    reminders,
+    survey,
+
+    student_ids: studentIDs
+  };
+}
+
 // ---------- Campaigns: Supabase-first CRUD (local fallback) ----------
 export async function listCampaigns() {
   const s = supa();
@@ -114,14 +156,7 @@ export async function listCampaigns() {
       .order("created_at", { ascending: false });
 
     if (!error && Array.isArray(data)) {
-      // Normalize any stringified JSON columns
-      const normalized = data.map(c => ({
-        ...c,
-        filters: maybeParseJSON(c.filters),
-        student_ids: maybeParseJSON(c.student_ids),
-        reminders: maybeParseJSON(c.reminders),
-        survey: maybeParseJSON(c.survey),
-      }));
+      const normalized = data.map(normalizeRowFromDB);
       try { localStorage.setItem(K.CAMPAIGNS, JSON.stringify(normalized)); } catch {}
       return normalized;
     }
@@ -129,7 +164,7 @@ export async function listCampaigns() {
   }
   try {
     const arr = JSON.parse(localStorage.getItem(K.CAMPAIGNS) || "[]");
-    return Array.isArray(arr) ? arr : [];
+    return Array.isArray(arr) ? arr.map(normalizeRowFromLocal) : [];
   } catch {
     return [];
   }
@@ -139,51 +174,49 @@ export async function getCampaignById(id) {
   const s = supa();
   if (s) {
     const { data, error } = await s.from("campaigns").select("*").eq("id", id).maybeSingle();
-    if (!error && data) {
-      // Normalize any stringified JSON columns
-      data.filters = maybeParseJSON(data.filters);
-      data.student_ids = maybeParseJSON(data.student_ids);
-      data.reminders = maybeParseJSON(data.reminders);
-      data.survey = maybeParseJSON(data.survey);
-      return data;
-    }
+    if (!error && data) return normalizeRowFromDB(data);
     console.warn("[ReachPoint] getCampaignById Supabase error; using local fallback:", error);
   }
   const local = (JSON.parse(localStorage.getItem(K.CAMPAIGNS) || "[]") || []).find(c => c.id === id) || null;
-  if (local) {
-    local.filters = maybeParseJSON(local.filters);
-    local.student_ids = maybeParseJSON(local.student_ids);
-    local.reminders = maybeParseJSON(local.reminders);
-    local.survey = maybeParseJSON(local.survey);
-  }
-  return local;
+  return local ? normalizeRowFromLocal(local) : null;
 }
 
 export async function saveCampaign(campaign) {
   const s = supa();
   if (s) {
-    // ✅ include survey so Execute can render chips
+    // Upsert using snake_case columns in DB
     const up = {
       id: campaign.id,
       name: campaign.name,
       filters: campaign.filters || [],
-      student_ids: campaign.studentIds || null,
-      reminders: campaign.reminders || null,
-      survey: campaign.survey || null,   // <-- added
+      student_ids: campaign.studentIds || campaign.student_ids || [],
+      reminders: campaign.reminders || [],
+      survey: campaign.survey || null
     };
-    const { error } = await s.from("campaigns").upsert(up);
+    const { error } = await s.from("campaigns").upsert(up, { onConflict: 'id' });
     if (error) throw error;
-    await listCampaigns(); // refresh local cache w/ normalized rows
+
+    // refresh local cache with normalized rows
+    await listCampaigns();
     return campaign;
   }
-  // local fallback
+
+  // ----- Local fallback -----
   const arr = JSON.parse(localStorage.getItem(K.CAMPAIGNS) || "[]");
-  const next = { ...campaign };
-  // keep local shape consistent
-  next.filters = next.filters || [];
-  next.student_ids = next.studentIds || null;
-  // ensure local copy stores survey too
-  next.survey = next.survey || null;
+
+  const next = {
+    id: campaign.id,
+    name: campaign.name,
+    createdAt: campaign.createdAt ?? Date.now(),
+    updatedAt: campaign.updatedAt ?? Date.now(),
+    filters: campaign.filters || [],
+    studentIds: campaign.studentIds || campaign.student_ids || [],
+    reminders: campaign.reminders || [],
+    survey: campaign.survey || null,
+
+    // keep snake_case mirror for older code paths
+    student_ids: campaign.studentIds || campaign.student_ids || []
+  };
 
   const i = arr.findIndex(c => c.id === campaign.id);
   if (i >= 0) arr[i] = next; else arr.push(next);
