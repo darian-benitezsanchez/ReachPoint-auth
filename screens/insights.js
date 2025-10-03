@@ -12,7 +12,20 @@ import {
   loadOrInitProgress
 } from "../data/campaignProgress.js";
 
-/* ------------- tiny DOM helpers ------------- */
+/* ---------------- Chart.js lazy loader (self-contained) ---------------- */
+async function ensureChart() {
+  if (window.Chart) return;
+  await new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/chart.js';
+    s.async = true;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Failed to load Chart.js'));
+    document.head.appendChild(s);
+  });
+}
+
+/* ---------------- tiny DOM helpers ---------------- */
 function div(cls, style = {}) {
   const n = document.createElement('div');
   if (cls) n.className = cls;
@@ -42,7 +55,7 @@ function destroyChart(maybe) {
   }
 }
 
-/* ------------- data helpers ------------- */
+/* ---------------- data helpers ---------------- */
 function pickName(stu) {
   if (!stu) return '';
   const a = String(stu.first_name || '').trim();
@@ -132,7 +145,7 @@ function extractRowsForCampaign(progress, idToStudent, campaignMeta) {
   return rows;
 }
 
-/* ------------- charts ------------- */
+/* ---------------- charts ---------------- */
 function overallResponseBar(ctx, counts) {
   const labels = Object.keys(counts);
   const data = labels.map(k => counts[k]);
@@ -197,8 +210,11 @@ function responsesByDOWLine(ctx, rows) {
   });
 }
 
-/* ------------- main screen ------------- */
+/* ---------------- main screen ---------------- */
 export async function Insights(root) {
+  // Ensure Chart.js is available (self-contained)
+  await ensureChart();
+
   // layout shell
   root.innerHTML = '';
   const page = div('', { padding: '16px' });
