@@ -3,18 +3,15 @@ import {
   getAllStudents,
   applyFilters,
   getStudentId,
-  getCampaignById, // <-- hydrate helper
+  getCampaignById,
 } from '../data/campaignsData.js';
 
 import {
-  // server-first reads
   loadProgressSnapshotFromSupabase,
   subscribeToCampaignProgress,
-  // writes
   recordOutcome,
   recordSurveyResponse,
   recordNote,
-  // reads used by UI
   loadOrInitProgress,
   getSurveyResponse,
   getNote,
@@ -31,19 +28,15 @@ function hashCampaignId() {
 
 /* ------------ robust campaign hydration -------------------- */
 async function resolveCampaign(campaignMaybe) {
-  // If a Promise was passed accidentally, await it.
   if (campaignMaybe && typeof campaignMaybe.then === 'function') {
     campaignMaybe = await campaignMaybe;
   }
-  // If we have a valid id + name/filters, use as-is.
   if (campaignMaybe?.id && (campaignMaybe.name || campaignMaybe.filters || campaignMaybe.student_ids)) {
     return campaignMaybe;
   }
-  // Otherwise fetch from Supabase/local cache using id from arg or URL.
   const id = campaignMaybe?.id || hashCampaignId();
   if (!id) return null;
   const fresh = await getCampaignById(id);
-  // Fall back to minimal shape if not found so UI can still show an error.
   return fresh || { id, name: '(unknown)', filters: [], student_ids: null };
 }
 
@@ -66,7 +59,6 @@ export async function Execute(root, campaignInput) {
   let selectedSurveyAnswer = null;
   let currentNotes = '';
 
-  // Simple undo stack
   const undoStack = [];
 
   // ======= BOOT (server-first with fallback) =======
@@ -74,11 +66,10 @@ export async function Execute(root, campaignInput) {
   try {
     students = await getAllStudents();
 
-    // 1) Filter by campaign.filters (jsonb: [{field,op,value}, ...])
+    // 1) Filter
     filtered = applyFilters(students, campaign.filters || []);
 
     // 2) Intersect with campaign.student_ids if present
-    //    Accept either real DB ids (id/student_id/uuid) OR the app’s derived ids (first-last-idx).
     const studentIds = (() => {
       const sids = campaign.student_ids;
       if (!sids) return null;
@@ -100,16 +91,16 @@ export async function Execute(root, campaignInput) {
       });
     }
 
-    // 3) Build queue + id map used across the screen
+    // 3) Build queue + id map
     queueIds = filtered.map((s, i) => getStudentId(s, i));
     filtered.forEach((s, i) => { idToStudent[getStudentId(s, i)] = s; });
 
-    // Prefer shared/server snapshot; fallback to local snapshot initialized with this queue
+    // Snapshots
     const remote = await loadProgressSnapshotFromSupabase(campaign.id);
     const local  = await loadOrInitProgress(campaign.id, queueIds);
     progress = remote ? mergeProgress(local, remote) : local;
 
-    // Live updates (optional, safe if not supported)
+    // Live updates
     if (typeof subscribeToCampaignProgress === 'function') {
       unsubscribe = subscribeToCampaignProgress(campaign.id, async () => {
         try {
@@ -145,7 +136,6 @@ export async function Execute(root, campaignInput) {
   }
 
   async function advance(strategy, skipId){
-    // Refresh from server if possible; fallback to local
     try {
       const r = await loadProgressSnapshotFromSupabase(campaign.id);
       if (r) progress = mergeProgress(progress, r);
@@ -172,7 +162,6 @@ export async function Execute(root, campaignInput) {
     selectedSurveyAnswer = ans;
     await recordSurveyResponse(campaign.id, currentId, ans);
 
-    // Refresh from server so logs/answers reflect across devices
     try {
       const r = await loadProgressSnapshotFromSupabase(campaign.id);
       if (r) progress = mergeProgress(progress, r);
@@ -193,7 +182,6 @@ export async function Execute(root, campaignInput) {
 
     progress = await recordOutcome(campaign.id, currentId, kind);
 
-    // Refresh from server to include any parallel updates
     try {
       const r = await loadProgressSnapshotFromSupabase(campaign.id);
       if (r) progress = mergeProgress(progress, r);
@@ -215,7 +203,6 @@ export async function Execute(root, campaignInput) {
       if (mode!=='running' && mode!=='missed') mode = 'running';
       currentNotes = await getNote(last.campaignId, last.studentId);
 
-      // Pull fresh
       try {
         const r = await loadProgressSnapshotFromSupabase(campaign.id);
         if (r) progress = mergeProgress(progress, r);
@@ -235,43 +222,13 @@ export async function Execute(root, campaignInput) {
     }
   }
 
-  // ======= Swipe (pointer) with guard so buttons still work =======
-  function isNoSwipeTarget(ev){
-    const t = ev.target;
-    return !!(t && t.closest && t.closest('[data-noswipe="1"]'));
-  }
-  function attachSwipe(el){
-    let startX = null, dx = 0;
-    el.onpointerdown = (ev)=>{
-      if (isNoSwipeTarget(ev)) return;
-      startX = ev.clientX; dx = 0;
-      try { el.setPointerCapture && el.setPointerCapture(ev.pointerId); } catch{}
-    };
-    el.onpointermove = (ev)=>{
-      if (startX==null) return;
-      dx = ev.clientX - startX;
-      el.style.transform = `translateX(${dx}px) rotate(${dx/30}deg)`;
-    };
-    el.onpointerup = (ev)=> {
-      if (startX==null) return;
-      if (!isNoSwipeTarget(ev)) {
-        if (dx > 80) onOutcome('answered');
-        else if (dx < -80) onOutcome('no_answer');
-      }
-      el.style.transform = '';
-      startX=null; dx=0;
-    };
-  }
+  // ======= NO SWIPE: buttons only =======
 
   // ======= Lazy-load current contact's survey & notes =======
   async function ensureSurveyAndNotesLoaded() {
     if (!currentId) return;
     selectedSurveyAnswer = await getSurveyResponse(campaign.id, currentId);
     currentNotes = await getNote(campaign.id, currentId);
-  }
-  async function ensureSurveySelected() {
-    if (!currentId) return;
-    selectedSurveyAnswer = await getSurveyResponse(campaign.id, currentId);
   }
 
   function header() {
@@ -289,7 +246,8 @@ export async function Execute(root, campaignInput) {
     );
   }
 
-  function render() {
+  // ─── render is async so survey/notes are present BEFORE drawing ───
+  async function render() {
     try {
       wrap.innerHTML = '';
       wrap.append(header());
@@ -316,14 +274,13 @@ export async function Execute(root, campaignInput) {
       }
 
       if ((mode==='running' || mode==='missed') && currentId){
-        ensureSurveyAndNotesLoaded();
+        // ⬇️ wait for survey+notes before building UI
+        await ensureSurveyAndNotesLoaded();
+
         const stu = idToStudent[currentId] || {};
-        const phone = stu['mobile_phone'] ?? stu.phone ?? stu.phone_number ?? stu.mobile ?? '';
-
         const card = div('', { padding: '16px', paddingBottom:'36px' });
-        const swipe = div('');
-        attachSwipe(swipe);
 
+        // Header
         const headerBox = div('', {
           display: 'flex',
           flexDirection: 'column',
@@ -332,19 +289,14 @@ export async function Execute(root, campaignInput) {
           marginBottom: '12px'
         });
 
-        const nameNode = h1(
-          `${String(stu.full_name ?? '')}`.trim() || 'Current contact'
-        );
+        const nameNode = h1(`${String(stu.full_name ?? '')}`.trim() || 'Current contact');
         nameNode.style.textAlign = 'center';
         nameNode.style.fontWeight = '800';
 
-        const hintNode = ptext('Swipe right = Answered, Swipe left = No answer', 'hint');
+        const hintNode = ptext('Use the buttons below to record the outcome.', 'hint');
         hintNode.style.textAlign = 'center';
 
-        const callBtnNode = phone ? callButton(phone) : disabledBtn('No phone number');
-        callBtnNode.style.marginTop = '6px';
-
-        headerBox.append(nameNode, hintNode, callBtnNode);
+        headerBox.append(nameNode, hintNode);
 
         const backBtn = button('← Back', 'btn backBtn', onBack);
         backBtn.disabled = undoStack.length === 0;
@@ -356,14 +308,15 @@ export async function Execute(root, campaignInput) {
           button('Answered','btn yes', ()=>onOutcome('answered'))
         );
 
-        swipe.append(
+        // Pretty details + survey + notes
+        card.append(
           headerBox,
-          details(stu),
+          prettyDetails(stu),
           surveyBlock(campaign.survey, selectedSurveyAnswer, onSelectSurvey),
           notesBlock(currentNotes, onChangeNotes),
           actions
         );
-        card.append(swipe);
+
         wrap.append(card);
       }
 
@@ -387,14 +340,10 @@ export async function Execute(root, campaignInput) {
 
   // ======= teardown on route change (and unmount) =======
   window.addEventListener('hashchange', () => {
-    if (typeof keyHandler === 'function') {
-      window.removeEventListener('keydown', keyHandler);
-    }
     try { unsubscribe && unsubscribe(); } catch {}
   });
 
   /* ---------------- Notes UI & Handlers ---------------- */
-
   function debounce(fn, delay=400) {
     let t = 0;
     return (...args) => {
@@ -429,8 +378,6 @@ export async function Execute(root, campaignInput) {
     ta.style.borderRadius = '8px';
     ta.style.fontFamily = 'inherit';
     ta.style.fontSize = '14px';
-    ta.setAttribute('data-noswipe','1');
-    ta.addEventListener('pointerdown', e => e.stopPropagation());
 
     ta.addEventListener('input', () => onChange(ta.value));
     ta.addEventListener('blur', () => onChange(ta.value));
@@ -439,34 +386,123 @@ export async function Execute(root, campaignInput) {
     return container;
   }
 
-  /* ---- tiny view helpers ---- */
-  function details(stu){
+  /* ---- PRETTY DETAILS CARD ---- */
+  function prettyDetails(stu) {
+    const v = (x) => (x==null ? '' : String(x).trim());
+    const pick = (variants=[]) => {
+      for (const key of Object.keys(stu||{})) {
+        for (const alias of variants) {
+          if (key.toLowerCase() === alias.toLowerCase()) {
+            const val = v(stu[key]);
+            if (val) return { key, val };
+          }
+        }
+      }
+      for (const key of Object.keys(stu||{})) {
+        for (const alias of variants) {
+          if (key.toLowerCase().includes(alias.toLowerCase())) {
+            const val = v(stu[key]);
+            if (val) return { key, val };
+          }
+        }
+      }
+      return null;
+    };
+
+    const phoneVal = pick(['Mobile Phone*','Mobile Number*','mobile','phone_number','phone','Cell Phone','Student Phone']);
+    const emailVal = pick(['Student Email','Email','email','Primary Email','Student Email Address']);
+    const schoolVal = pick(['School','School Name']);
+    const gradeVal = pick(['Grade','Current Grade','Grade Level']);
+    const parentName = pick(['Parent Name','Guardian Name','Parent/Guardian Name']);
+    const parentPhone = pick(['Parent Phone','Guardian Phone','Parent/Guardian Phone','Parent Mobile']);
+    const parentEmail = pick(['Parent Email','Guardian Email','Parent/Guardian Email']);
+    const addr = pick(['Mailing Street Address','Address','Home Address']);
+    const city = pick(['Mailing City','City']);
+    const state = pick(['Mailing State/Province','State']);
+    const zip = pick(['Mailing Zip/Postal Code','Zip','Postal Code']);
+
+    const summaryRows = [];
+    if (schoolVal) summaryRows.push(['School', schoolVal.val]);
+    if (gradeVal)  summaryRows.push(['Grade', gradeVal.val]);
+    if (phoneVal)  summaryRows.push(['Phone', phoneLinkOrText(phoneVal.val)]);
+    if (emailVal)  summaryRows.push(['Email', emailLink(emailVal.val)]);
+
+    if (parentName || parentPhone || parentEmail) {
+      const lines = [];
+      if (parentName)  lines.push(escapeText(parentName.val));
+      if (parentPhone) lines.push(nodeToString(phoneLinkOrText(parentPhone.val)));
+      if (parentEmail) lines.push(nodeToString(emailLink(parentEmail.val)));
+      summaryRows.push(['Parent/Guardian', htmlLines(lines)]);
+    }
+
+    const addressParts = [addr?.val, city?.val, [state?.val, zip?.val].filter(Boolean).join(' ')].filter(Boolean);
+    if (addressParts.length) summaryRows.push(['Address', addressParts.join(', ')]);
+
     const card = div('detailsCard');
-    const keys = Object.keys(stu || {});
-    if (!keys.length) card.append(ptext('No student fields available','muted'));
-    for (const k of keys) {
-      const vRaw = stu[k];
+    card.style.width = '100%';
+
+    for (const [k,vNodeOrText] of summaryRows) {
       const row = div('kv');
-      const keyNode = div('k', k);
-      const valNode = div('v');
-
-      const looksPhoneKey = /phone/i.test(k) || /\bmobile\b/i.test(k);
-      const looksPhoneVal = typeof vRaw === 'string' && cleanDigits(vRaw).length >= 10;
-
-      if (looksPhoneKey || looksPhoneVal) valNode.append(phoneLinkOrText(vRaw));
-      else valNode.append(document.createTextNode(String(vRaw)));
-
-      row.append(keyNode, valNode);
+      row.append(div('k', k));
+      const vCell = div('v');
+      if (vNodeOrText instanceof Node) vCell.append(vNodeOrText);
+      else if (typeof vNodeOrText === 'string') vCell.textContent = vNodeOrText;
+      else vCell.append(vNodeOrText);
+      row.append(vCell);
       card.append(row);
     }
-    return card;
+
+    const knownKeys = new Set(
+      [phoneVal,emailVal,schoolVal,gradeVal,parentName,parentPhone,parentEmail,addr,city,state,zip]
+        .filter(Boolean)
+        .map(x => x.key)
+    );
+
+    const extras = [];
+    for (const k of Object.keys(stu||{})) {
+      if (knownKeys.has(k)) continue;
+      const val = v(stu[k]);
+      if (!val) continue;
+      extras.push([k, val]);
+    }
+
+    if (extras.length) {
+      const det = document.createElement('details');
+      const sum = document.createElement('summary');
+      sum.textContent = 'More details';
+      sum.style.cursor = 'pointer';
+      det.append(sum);
+
+      const extraCard = div('detailsCard');
+      extraCard.style.marginTop = '8px';
+
+      for (const [k,val] of extras.slice(0, 40)) {
+        const row = div('kv');
+        row.append(div('k', prettifyLabel(k)));
+        row.append(div('v', val));
+        extraCard.append(row);
+      }
+      det.append(extraCard);
+      card.append(det);
+    }
+
+    const topBtnWrap = div('', { display:'flex', justifyContent:'center', margin:'8px 0 12px' });
+    const phoneRaw = phoneVal?.val || '';
+    const callBtnNode = phoneRaw ? callButton(phoneRaw) : disabledBtn('No phone number');
+    topBtnWrap.append(callBtnNode);
+
+    const outer = div('', { maxWidth:'900px', margin:'0 auto' });
+    outer.append(topBtnWrap, card);
+    return outer;
   }
 
+  /* ---- Survey ---- */
   function surveyBlock(survey, sel, onPick){
     if (!survey || !survey.question || !Array.isArray(survey.options) || !survey.options.length) return div('');
     const options = survey.options.map(opt => {
-      const c = chip(opt, 'surveyChip'+(sel===opt?' sel':''), ()=>onPick(opt));
-      c.setAttribute('data-noswipe','1');
+      const isSel = sel === opt;
+      const c = chip(opt, 'surveyChip' + (isSel ? ' sel' : ''), ()=>onPick(opt));
+      c.setAttribute('aria-pressed', String(isSel));
       return c;
     });
     const box = div('surveyCard',
@@ -521,10 +557,8 @@ export async function Execute(root, campaignInput) {
     return box;
   }
 
-  /* ===== tel: helpers (click-to-call) ===== */
-  function cleanDigits(s) {
-    return String(s || '').replace(/[^\d+]/g, '');
-  }
+  /* ===== tel / email helpers ===== */
+  function cleanDigits(s) { return String(s || '').replace(/[^\d+]/g, ''); }
   function toTelHref(raw, defaultCountry = '+1') {
     let n = cleanDigits(raw);
     if (!n) return null;
@@ -548,36 +582,62 @@ export async function Execute(root, campaignInput) {
     a.textContent = href ? `Call ${label}` : 'No phone number';
     a.style.pointerEvents = href ? 'auto' : 'none';
     a.style.opacity = href ? '1' : '.6';
-    a.setAttribute('data-noswipe','1');
-    a.addEventListener('pointerdown', e => e.stopPropagation());
     if (href) {
       a.addEventListener('click', (e) => {
         const ok = confirm(`Place a call to ${label}?`);
         if (!ok) { e.preventDefault(); return; }
         e.preventDefault();
-        window.location.href = href; // Safari-friendly
+        window.location.href = href;
       });
     }
     return a;
   }
   function phoneLinkOrText(val) {
     const href = toTelHref(val);
-    if (!href) return document.createTextNode(String(val));
+    if (!href) return document.createTextNode(String(val ?? ''));
     const a = document.createElement('a');
     a.href = href;
     a.textContent = humanPhone(val);
     a.style.color = 'inherit';
     a.style.textDecoration = 'underline';
-    a.setAttribute('data-noswipe','1');
-    a.addEventListener('pointerdown', e => e.stopPropagation());
     a.addEventListener('click', (e) => {
       e.preventDefault();
       window.location.href = href;
     });
     return a;
   }
+  function emailLink(val) {
+    const a = document.createElement('a');
+    a.href = `mailto:${String(val||'').trim()}`;
+    a.textContent = String(val||'').trim();
+    a.style.color = 'inherit';
+    a.style.textDecoration = 'underline';
+    return a;
+  }
+  function prettifyLabel(k) {
+    return String(k)
+      .replace(/_/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/\b\w/g, (m)=>m.toUpperCase());
+  }
+  function escapeText(t){ const s=document.createElement('span'); s.textContent=String(t); return s.textContent; }
+  function nodeToString(n){
+    const t = document.createElement('div'); t.append(n); return t.innerHTML;
+  }
+  function htmlLines(lines){
+    const frag = document.createElement('div');
+    frag.style.display = 'flex';
+    frag.style.flexDirection = 'column';
+    lines.forEach(line => {
+      const p = document.createElement('div');
+      p.innerHTML = line;
+      frag.append(p);
+    });
+    return frag;
+  }
 
-  /* dom utilities (SAFE VARIADIC VERSION) */
+  /* dom utilities */
   function div(cls, ...args) {
     const n = document.createElement('div');
     if (cls) n.className = cls;
@@ -600,8 +660,6 @@ export async function Execute(root, campaignInput) {
     b.className=cls;
     b.textContent=text;
     b.onclick=on;
-    b.setAttribute('data-noswipe','1');
-    b.addEventListener('pointerdown', e => e.stopPropagation());
     return b;
   }
   function actionRow(...kids){
@@ -609,6 +667,7 @@ export async function Execute(root, campaignInput) {
     r.style.display = 'flex';
     r.style.gap = '8px';
     r.style.marginTop = '12px';
+    r.style.justifyContent = 'center';
     kids.forEach(k=>k&&r.append(k));
     return r;
   }
@@ -618,8 +677,6 @@ export async function Execute(root, campaignInput) {
     b.textContent=text;
     b.disabled=true;
     b.style.opacity=.6;
-    b.setAttribute('data-noswipe','1');
-    b.addEventListener('pointerdown', e => e.stopPropagation());
     return b;
   }
   function chip(label, cls, on){
@@ -627,14 +684,16 @@ export async function Execute(root, campaignInput) {
     c.className=cls;
     c.textContent=label;
     c.onclick=on;
-    c.setAttribute('data-noswipe','1');
-    c.addEventListener('pointerdown', e => e.stopPropagation());
     return c;
   }
   function chipRow(arr){ const r=div('surveyChips'); arr.forEach(x=>r.append(x)); return r; }
   function cardKV(entries){
     const card = div('detailsCard'); card.style.width='90%';
-    for (const [k,v] of entries){ const row = div('kv'); row.append(div('k', k), div('v', String(v))); card.append(row); }
+    for (const [k,v] of entries){
+      const row = div('kv');
+      row.append(div('k', k), div('v', String(v)));
+      card.append(row);
+    }
     return card;
   }
 
