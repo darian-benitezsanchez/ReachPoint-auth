@@ -43,7 +43,6 @@ function ctxFor(id){ destroyChartOnCanvasId(id); const el=document.getElementByI
 // ======= small utils ===============================================
 function toDateSafe(ts){
   if (ts==null) return null;
-  // accept ISO or numeric strings
   let n = ts;
   if (typeof ts === 'string'){
     const num = Number(ts);
@@ -65,18 +64,10 @@ function pickName(stu){
 }
 function getGradYear(stu){
   const keys = [
-    'High School Graduation Year*',
-    'High School Graduation Year',
-    'Graduation Year',
-    'HS Grad Year',
-    'Grad Year',
-    'grad_year',
-    'graduation_year'
+    'High School Graduation Year*','High School Graduation Year','Graduation Year',
+    'HS Grad Year','Grad Year','grad_year','graduation_year'
   ];
-  for (const k of keys){
-    const v = stu?.[k];
-    if (v != null && String(v).trim() !== '') return String(v).trim();
-  }
+  for (const k of keys){ const v = stu?.[k]; if (v != null && String(v).trim() !== '') return String(v).trim(); }
   return 'Unknown';
 }
 function uniq(arr){ return Array.from(new Set(arr)); }
@@ -85,7 +76,7 @@ function uniq(arr){ return Array.from(new Set(arr)); }
 async function sbListCampaigns(){
   const { data, error } = await window.supabase
     .from('campaigns')
-    .select('id,name,active,created_at')
+    .select('id,name,created_at')       // no "active" column
     .order('created_at', { ascending:false });
   if (error) throw error;
   return data || [];
@@ -93,13 +84,12 @@ async function sbListCampaigns(){
 
 /**
  * Preferred source: v_call_progress_latest
- * Expected columns (flexible): campaign_id, student_id/contact_id, outcome, survey_answer, last_called_at/updated_at/created_at
- * Fallback: call_progress (we will pick the last row per student per campaign)
+ * Fallback: call_progress (pick latest row per student per campaign)
  */
 async function sbLoadProgressLatest(campaignId){
   const cid = String(campaignId);
 
-  // try the view first
+  // try the view
   let viewErr = null;
   try {
     const { data, error } = await window.supabase
@@ -108,33 +98,32 @@ async function sbLoadProgressLatest(campaignId){
       .eq('campaign_id', cid);
     if (error) throw error;
     if (Array.isArray(data)) return { rows: data, from: 'view' };
-  } catch(e){ viewErr = e; /* fall through */ }
+  } catch(e){ viewErr = e; }
 
-  // fallback: call_progress -> pick latest per student
+  // fallback: call_progress
   const { data, error } = await window.supabase
     .from('call_progress')
     .select('*')
     .eq('campaign_id', cid);
   if (error) throw error;
 
-  // Reduce to most recent per student_id/contact_id
   const byStudent = new Map();
   for (const r of (data || [])){
     const sid = String(r.student_id ?? r.contact_id ?? r.studentId ?? r.contactId ?? '');
     if (!sid) continue;
-    const at = Number(r.last_called_at ?? r.updated_at ?? r.created_at ?? 0) || (toDateSafe(r.last_called_at || r.updated_at || r.created_at)?.getTime() || 0);
+    const at = Number(r.last_called_at ?? r.updated_at ?? r.created_at ?? 0) ||
+               (toDateSafe(r.last_called_at || r.updated_at || r.created_at)?.getTime() || 0);
     const prev = byStudent.get(sid);
     if (!prev || at >= prev.__ts){ byStudent.set(sid, { ...r, __ts: at }); }
   }
   return { rows: Array.from(byStudent.values()), from: 'table', viewErr };
 }
 
-/** Optional supplementation: latest survey answer if not in progress rows */
+/** Latest survey answers (if not already present in progress rows) */
 async function sbLatestSurveyAnswers(campaignId, studentIds){
   if (!studentIds.length) return new Map();
   const cid = String(campaignId);
   const ids = uniq(studentIds).filter(Boolean);
-  // Supabase 'in' has a URL length cap; chunk if necessary
   const out = new Map();
   const CHUNK = 500;
   for (let i=0;i<ids.length;i+=CHUNK){
@@ -152,7 +141,7 @@ async function sbLatestSurveyAnswers(campaignId, studentIds){
       if (!prev || ts > prev.ts){ out.set(sid, { answer: r.answer, ts }); }
     }
   }
-  return out; // Map studentId -> {answer, ts}
+  return out;
 }
 
 /** Fetch students in bulk to enrich */
@@ -163,7 +152,7 @@ async function sbFetchStudentsByIds(studentIds){
   const CHUNK = 1000;
   for (let i=0;i<ids.length;i+=CHUNK){
     const slice = ids.slice(i, i+CHUNK);
-    // Try various id column names; most commonly 'id'
+    // try 'id'
     const { data, error } = await window.supabase
       .from('students')
       .select('*')
@@ -172,7 +161,7 @@ async function sbFetchStudentsByIds(studentIds){
       for (const s of data) out[String(s.id)] = s;
       continue;
     }
-    // Fallback to 'student_id'
+    // fallback 'student_id'
     const alt = await window.supabase
       .from('students')
       .select('*')
@@ -183,7 +172,7 @@ async function sbFetchStudentsByIds(studentIds){
   return out;
 }
 
-// ======= Transform progress rows into chartable rows =======================
+// ======= Transform rows to chartable rows ===========================
 function normalizeProgressRows(progressRows, latestSurveyMap, campaign){
   const rows = [];
   for (const r of (progressRows || [])){
@@ -208,7 +197,7 @@ function normalizeProgressRows(progressRows, latestSurveyMap, campaign){
   return rows;
 }
 
-// ======= Charts ============================================================
+// ======= Charts =====================================================
 function overallResponseBar(ctx, counts) {
   const labels = Object.keys(counts);
   const data = labels.map(k => counts[k]);
@@ -265,7 +254,7 @@ function responsesByDOWLine(ctx, rows) {
   });
 }
 
-// ======= Empty state / helpers ============================================
+// ======= Empty state helpers =======================================
 function showEmpty(text) {
   const host = document.querySelector('[data-insights-empty]');
   if (!host) return;
@@ -276,7 +265,7 @@ function showEmpty(text) {
 }
 function clearEmpty(){ const host=document.querySelector('[data-insights-empty]'); if (host) host.textContent=''; }
 
-// ======= Main screen =======================================================
+// ======= Main screen ===============================================
 export async function Insights(root) {
   await ensureChart();
 
@@ -350,11 +339,11 @@ export async function Insights(root) {
   // Load campaigns
   let campaigns = [];
   try { campaigns = await sbListCampaigns(); }
-  catch(e){ console.error('[Insights] failed to load campaigns', e); }
+  catch(e){ console.error('[Insights] failed to load campaigns', e); showEmpty('Could not load campaigns.'); return; }
 
-  // Populate picker
+  // Populate picker (no active filtering)
   picker.innerHTML = '';
-  const active = campaigns.filter(c => c?.active !== false);
+  const active = campaigns; // as requested — no filtering
   if (!active.length){
     const opt = document.createElement('option');
     opt.value = ''; opt.textContent = 'No campaigns';
@@ -397,7 +386,6 @@ export async function Insights(root) {
     const studentIds = progressRows.map(r => String(r.student_id ?? r.contact_id ?? r.studentId ?? r.contactId ?? '')).filter(Boolean);
     let latestSurvey = new Map();
     try {
-      // Only bother if rows don’t already include survey answers
       const hasSurveyField = progressRows.some(r => r.survey_answer != null || r.answer != null);
       if (!hasSurveyField) latestSurvey = await sbLatestSurveyAnswers(campaignId, studentIds);
     } catch(e){ console.warn('[Insights] survey fallback failed', e); }
@@ -415,7 +403,7 @@ export async function Insights(root) {
       return;
     }
 
-    // Tally outcomes (case-insensitive keys)
+    // Tally outcomes
     const counts = {};
     for (const r of normRows){
       const key = String(r.response ?? 'unknown').trim().toLowerCase() || 'unknown';
