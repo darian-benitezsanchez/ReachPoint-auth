@@ -28,7 +28,7 @@ const ROUTES = {
 };
 
 // Screens that MUST be authenticated
-const AUTH_ONLY = new Set(['#/dashboard', '#/create', '#/call', '#/execution', '#/execute']);
+const AUTH_ONLY = new Set(['#/dashboard', '#/create', '#/call', '#/execution', '#/execute', '#/insights']);
 
 const DEFAULT_ROUTE = '#/dashboard';
 const LOGIN_ROUTE = '#/login';
