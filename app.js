@@ -5,7 +5,7 @@ import { LoginScreen } from './screens/Login-Screen.js';
 import { Dashboard } from './screens/dashboard.js';
 import { CreateCampaign } from './screens/createCampaigns.js';
 import { Call } from './screens/Call.js';
-import { Execution } from './screens/execution.js';
+import { Execute as Execution } from './screens/execution.js'; // <-- alias existing export
 import { Insights } from './screens/insights.js';
 
 import {
@@ -22,12 +22,13 @@ const ROUTES = {
   '#/dashboard': Dashboard,
   '#/create': CreateCampaign,
   '#/call': Call,
-  '#/execution': Execution,
-  '#/insights': Insights, // not gated per your request
+  '#/execution': Execution, // keep existing
+  '#/execute': Execution,   // add alias so #/execute/<id> works with your screen's hash parser
+  '#/insights': Insights,   // not gated per your request
 };
 
 // Screens that MUST be authenticated
-const AUTH_ONLY = new Set(['#/dashboard', '#/create', '#/call', '#/execution']);
+const AUTH_ONLY = new Set(['#/dashboard', '#/create', '#/call', '#/execution', '#/execute']);
 
 const DEFAULT_ROUTE = '#/dashboard';
 const LOGIN_ROUTE = '#/login';
@@ -39,7 +40,10 @@ const root = document.getElementById('app');
 function getHashRoute() {
   const h = location.hash || DEFAULT_ROUTE;
   // normalize to known route or fallback
-  return ROUTES[h] ? h : DEFAULT_ROUTE;
+  // Only compare the base path (e.g., '#/execute') so deep-links like '#/execute/123' map correctly
+  const base = h.replace(/^(#[^/]+\/[^/]+).*/, '$1'); // keep '#/x' or '#/x/y' start
+  const key = Object.keys(ROUTES).find(k => h === k || h.startsWith(k + '/')) || DEFAULT_ROUTE;
+  return key;
 }
 
 function setLoading(visible, msg = 'Loading…') {
@@ -57,18 +61,16 @@ function setLoading(visible, msg = 'Loading…') {
 }
 
 function setNavForAuth(isAuthed, userEmail = '') {
-  // Toggle nav links based on auth (if they exist in the DOM)
   const nav = document.querySelector('header .nav');
   if (!nav) return;
 
-  // Gate the links in AUTH_ONLY
   nav.querySelectorAll('a[href^="#/"]').forEach((a) => {
     const href = a.getAttribute('href');
-    const shouldHide = AUTH_ONLY.has(href) && !isAuthed;
-    a.style.display = shouldHide ? 'none' : '';
+    const baseHref = href.replace(/^(#[^/]+\/[^/]+).*/, '$1');
+    const shouldHide = AUTH_ONLY.has(href) || AUTH_ONLY.has(baseHref);
+    a.style.display = (!isAuthed && shouldHide) ? 'none' : '';
   });
 
-  // Add/remove a Logout link (data-logout) dynamically if you want
   let logoutLink = nav.querySelector('[data-logout]');
   if (isAuthed) {
     if (!logoutLink) {
@@ -89,7 +91,9 @@ function setNavForAuth(isAuthed, userEmail = '') {
 function setActiveNav(route) {
   const links = document.querySelectorAll('header .nav a[href^="#/"]');
   links.forEach((a) => {
-    if (a.getAttribute('href') === route) {
+    const href = a.getAttribute('href');
+    const active = route === href || location.hash.startsWith(href + '/');
+    if (active) {
       a.classList.add('active');
       a.setAttribute('aria-current', 'page');
     } else {
@@ -104,20 +108,16 @@ function setActiveNav(route) {
 async function guardAndRender() {
   setLoading(true, 'Checking session…');
 
-  // Get current route & session
   const route = getHashRoute();
   const session = await getSession().catch(() => null);
   const isAuthed = !!session;
   const user = isAuthed ? await getUser().catch(() => null) : null;
 
-  // Reflect auth in nav
   setNavForAuth(isAuthed, user?.email || '');
 
-  // Route-level guard
   if (AUTH_ONLY.has(route) && !isAuthed) {
-    // stash the intended route (optional)
     try {
-      const nextPath = route;
+      const nextPath = location.hash || route;
       const key = 'reachpoint.nextPath';
       sessionStorage.setItem(key, nextPath);
     } catch {}
@@ -126,12 +126,11 @@ async function guardAndRender() {
     return;
   }
   if (route === LOGIN_ROUTE && isAuthed) {
-    // If we came from a gated route earlier, send them back there
     let next = DEFAULT_ROUTE;
     try {
       const key = 'reachpoint.nextPath';
       const stored = sessionStorage.getItem(key);
-      if (stored && ROUTES[stored]) {
+      if (stored && (ROUTES[stored] || Object.keys(ROUTES).some(k => stored.startsWith(k + '/')))) {
         next = stored;
         sessionStorage.removeItem(key);
       }
@@ -141,12 +140,11 @@ async function guardAndRender() {
     return;
   }
 
-  // Render the route
   const renderFn = ROUTES[route] || ROUTES[DEFAULT_ROUTE];
   try {
-    // Clear loading then render
     setLoading(false);
     setActiveNav(route);
+    // Pass root only; your Execution screen reads the campaign id from the hash itself.
     renderFn(root);
   } catch (err) {
     console.error('[ReachPoint] Render error:', err);
@@ -161,16 +159,12 @@ async function guardAndRender() {
 
 /* -------------------------- global event handlers ------------------------- */
 
-// Hash routing
 window.addEventListener('hashchange', guardAndRender);
 
-// Auth state changes (login/logout/token refresh)
 onAuthChange(() => {
-  // Always re-evaluate guards & UI when auth changes
   guardAndRender();
 });
 
-// Logout click (delegated)
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-logout]');
   if (!el) return;
@@ -185,7 +179,6 @@ document.addEventListener('click', async (e) => {
 /* ---------------------------------- boot ---------------------------------- */
 
 (async function boot() {
-  // Ensure there is a default route
   if (!location.hash || !location.hash.startsWith('#/')) {
     location.hash = DEFAULT_ROUTE;
   }
@@ -193,7 +186,6 @@ document.addEventListener('click', async (e) => {
 })();
 
 /* --------------------------------- styles --------------------------------- */
-/* Optional tiny styles for loading; keep if you want */
 const style = document.createElement('style');
 style.textContent = `
 .loading { padding: 36px; display: grid; gap: 10px; place-items: center; color: #64748B; }
