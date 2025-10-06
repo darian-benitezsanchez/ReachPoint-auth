@@ -5,7 +5,7 @@ import { LoginScreen } from './screens/Login-Screen.js';
 import { Dashboard } from './screens/dashboard.js';
 import { CreateCampaign } from './screens/createCampaigns.js';
 import { Call } from './screens/Call.js';
-import Execution from './screens/execution.js';
+import { Execution } from './screens/execution.js';
 import { Insights } from './screens/insights.js';
 
 import {
