@@ -1,120 +1,77 @@
 // screens/Login-Screen.js
-// SIMPLE MODE ONLY: uses plaintext passwords in data/userLogins.json
-// Expected JSON shape:
-// [
-//   { "userId": "darian", "passwordPlain": "cats-are-cool", "role": "admin", "active": true },
-//   ...
-// ]
+import { signIn, signUp } from '../auth-client.js';
 
-const LOGIN_JSON_URL = './data/userLogins.json';
-const SESSION_KEY = 'rpAuth';
-
-function setSession(user) {
-  sessionStorage.setItem(
-    SESSION_KEY,
-    JSON.stringify({
-      userId: user.userId,
-      role: user.role ?? 'user',
-      loginAt: new Date().toISOString(),
-    })
-  );
-}
-
-async function loadUsers() {
-  const res = await fetch(LOGIN_JSON_URL, { cache: 'no-store' });
-  if (!res.ok) throw new Error('Unable to load user list');
-  return res.json();
-}
-
-function renderLogin(root) {
+export function LoginScreen(root) {
   root.innerHTML = `
-    <main class="login-wrap">
-      <h1>Sign in</h1>
-      <p class="muted">Private site. Accounts are provisioned by the admin.</p>
-
-      <form id="loginForm" autocomplete="off">
-        <div class="field">
-          <label for="userId">User ID</label>
-          <input id="userId" name="userId" type="text" required />
+    <div class="auth-card">
+      <h1>Sign in to ReachPoint</h1>
+      <form id="auth-form">
+        <label>Email</label>
+        <input id="email" type="email" required autocomplete="email" />
+        <label>Password</label>
+        <input id="password" type="password" required minlength="6" autocomplete="current-password" />
+        <div class="row gap">
+          <button type="submit" id="loginBtn">Sign In</button>
+          <button type="button" id="signupBtn" class="secondary">Create Account</button>
         </div>
-        <div class="field">
-          <label for="password">Password</label>
-          <input id="password" name="password" type="password" required />
-        </div>
-        <button class="btn btn-primary" type="submit">Sign in</button>
-        <div id="loginError" class="error"></div>
+        <p id="authMsg" class="muted" role="status" aria-live="polite"></p>
       </form>
-    </main>
+    </div>
   `;
-}
 
-async function handleLoginSubmit(e) {
-  e.preventDefault();
-  const errEl = document.getElementById('loginError');
-  errEl.textContent = '';
+  const form = root.querySelector('#auth-form');
+  const email = root.querySelector('#email');
+  const password = root.querySelector('#password');
+  const msg = root.querySelector('#authMsg');
+  const loginBtn = root.querySelector('#loginBtn');
+  const signupBtn = root.querySelector('#signupBtn');
 
-  const userId = document.getElementById('userId').value.trim();
-  // Do NOT trim password—spaces could be intentional
-  const password = document.getElementById('password').value;
-
-  try {
-    const users = await loadUsers();
-    if (!Array.isArray(users)) {
-      errEl.textContent = 'User list is misconfigured.';
-      return;
-    }
-
-    const user = users.find(
-      (u) =>
-        String(u.userId || '').toLowerCase() === userId.toLowerCase() &&
-        u.active !== false
-    );
-
-    if (!user) {
-      errEl.textContent = 'Invalid credentials.';
-      return;
-    }
-
-    if (typeof user.passwordPlain !== 'string') {
-      errEl.textContent = 'Account is misconfigured (no password).';
-      return;
-    }
-
-    if (password === user.passwordPlain) {
-      setSession(user);
-      // Route-only navigation; bootloader will import app.js and render dashboard
-      location.hash = '#/dashboard';
-      return;
-    }
-
-    errEl.textContent = 'Invalid credentials.';
-  } catch (err) {
-    console.error(err);
-    errEl.textContent = 'Login failed. Please try again.';
-  }
-}
-
-function attachHandlers() {
-  const form = document.getElementById('loginForm');
-  if (form) form.addEventListener('submit', handleLoginSubmit);
-}
-
-(function init() {
-  // If already logged in, skip to dashboard (no extra checks)
-  if (sessionStorage.getItem(SESSION_KEY)) {
-    location.hash = '#/dashboard';
-    return;
+  function setBusy(isBusy, text = '') {
+    loginBtn.disabled = isBusy;
+    signupBtn.disabled = isBusy;
+    form.querySelectorAll('input').forEach(i => (i.disabled = isBusy));
+    msg.textContent = text;
   }
 
-  const root =
-    document.getElementById('app') ||
-    (() => {
-      const m = document.createElement('main');
-      m.id = 'app';
-      document.body.appendChild(m);
-      return m;
-    })();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const mail = email.value.trim();
+    const pass = password.value;
+    if (!mail || !pass) return;
 
-  renderLogin(root);
-  attachHandlers();
-})();
+    setBusy(true, 'Signing in…');
+    try {
+      await signIn(mail, pass);
+      msg.textContent = 'Signed in!';
+      // Use the same key the router uses
+      const key = 'reachpoint.nextPath';
+      const next = sessionStorage.getItem(key) || '#/dashboard';
+      sessionStorage.removeItem(key);
+      location.hash = next;
+    } catch (err) {
+      msg.textContent = err?.message || 'Login failed';
+      setBusy(false);
+      password.focus();
+      password.select?.();
+    }
+  });
+
+  signupBtn.addEventListener('click', async () => {
+    const mail = email.value.trim();
+    const pass = password.value;
+    if (!mail || !pass) {
+      msg.textContent = 'Enter email and password to create an account.';
+      return;
+    }
+
+    setBusy(true, 'Creating account…');
+    try {
+      await signUp(mail, pass);
+      msg.textContent = 'Account created. Check your email if confirmations are enabled, then sign in.';
+    } catch (err) {
+      msg.textContent = err?.message || 'Signup failed';
+    } finally {
+      setBusy(false);
+    }
+  });
+}

@@ -22,21 +22,18 @@
         try {
           const url = window.__SUPABASE_URL__;
           const key = window.__SUPABASE_ANON_KEY__;
-          if (!url || !key) {
-            console.warn("[ReachPoint] Supabase credentials missing; running in local-only fallback.");
-            return;
-          }
+          if (!url || !key) return;
 
-          // Namespace "supabase" is provided by the CDN; we must create a client instance.
           const client = supabase.createClient(url, key, {
-            auth: { persistSession: false },
+            auth: {
+              persistSession: true,        // <-- was false
+              autoRefreshToken: true
+            },
             global: { headers: { "x-reachpoint-env": "dev" } },
           });
 
-          // Expose client and a capability check
           window.supabase = client;
           window.hasSupabase = () => !!(window.supabase && typeof window.supabase.from === "function");
-
           console.log("[ReachPoint] Supabase client initialized:", window.hasSupabase());
         } catch (e) {
           console.error("[ReachPoint] Failed to init Supabase; local-only fallback.", e);
