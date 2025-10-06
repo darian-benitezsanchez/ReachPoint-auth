@@ -49,10 +49,31 @@ function chartCanvas(id) {
   wrap.appendChild(c);
   return { wrap, canvas: c };
 }
+
+/* Destroy a chart instance if we have it */
 function destroyChart(maybe) {
   if (maybe && typeof maybe.destroy === 'function') {
     try { maybe.destroy(); } catch {}
   }
+}
+
+/* Also destroy any chart that Chart.js has bound to a canvas element */
+function destroyChartOnCanvasId(canvasId) {
+  if (!window.Chart) return;
+  const el = document.getElementById(canvasId);
+  if (!el) return;
+  // Chart.js v3/v4: Chart.getChart(elementOrId)
+  const existing = window.Chart.getChart ? window.Chart.getChart(el) : null;
+  if (existing) {
+    try { existing.destroy(); } catch {}
+  }
+}
+
+/* Get 2D context after ensuring no chart is attached */
+function ctxFor(canvasId) {
+  destroyChartOnCanvasId(canvasId);
+  const el = document.getElementById(canvasId);
+  return el ? el.getContext('2d') : null;
 }
 
 /* ---------------- data helpers ---------------- */
@@ -89,7 +110,6 @@ function toDateSafe(ts) {
 function buildQueueMap(students, campaign) {
   let filtered = applyFilters(students, campaign?.filters || []);
 
-  // Intersect with campaign.student_ids/studentIds if present (mirror of Execute)
   const rawIds = campaign?.student_ids ?? campaign?.studentIds ?? null;
   let studentIds = null;
   if (Array.isArray(rawIds)) {
@@ -120,11 +140,9 @@ function extractRowsForCampaign(progress, idToStudent, campaignMeta) {
   for (const [studentId, c] of Object.entries(contacts)) {
     const stu = idToStudent[studentId] || null;
     const fullName = pickName(stu);
-
     const response = c?.surveyAnswer ?? c?.outcome ?? null;
     const notes = String(c?.notes ?? '');
 
-    // prefer surveyLogs last timestamp, else lastCalledAt
     let ts = c?.lastCalledAt || 0;
     if (Array.isArray(c?.surveyLogs) && c.surveyLogs.length > 0) {
       const last = c.surveyLogs[c.surveyLogs.length - 1];
@@ -154,6 +172,7 @@ function overallResponseBar(ctx, counts) {
     data: { labels, datasets: [{ label: 'Count', data }] },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
     }
@@ -171,7 +190,11 @@ function answeredByGradYearPie(ctx, rows, idToStudent) {
   return new Chart(ctx, {
     type: 'pie',
     data: { labels, datasets: [{ label: 'Answered', data }] },
-    options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom' } }
+    }
   });
 }
 function responsesByHourLine(ctx, rows) {
@@ -186,6 +209,7 @@ function responsesByHourLine(ctx, rows) {
     data: { labels: [...Array(24).keys()].map(h => `${h}:00`), datasets: [{ label: 'Answered', data: hours, tension: 0.25 }] },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
     }
@@ -204,6 +228,7 @@ function responsesByDOWLine(ctx, rows) {
     data: { labels, datasets: [{ label: 'Answered', data: dow, tension: 0.25 }] },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
     }
@@ -212,7 +237,6 @@ function responsesByDOWLine(ctx, rows) {
 
 /* ---------------- main screen ---------------- */
 export async function Insights(root) {
-  // Ensure Chart.js is available (self-contained)
   await ensureChart();
 
   // layout shell
@@ -292,17 +316,13 @@ export async function Insights(root) {
   page.append(header, sectionWrap);
   root.appendChild(page);
 
-  // State
+  // Track chart instances for cleanup
   let charts = { overall: null, gy: null, hour: null, dow: null };
   let students = [];
   let campaignList = [];
 
-  // Load base data (Supabase-first via campaignsData helpers)
-  try {
-    students = await getAllStudents();
-  } catch (e) {
-    console.error('Insights: failed to load students', e);
-  }
+  // Load base data
+  try { students = await getAllStudents(); } catch (e) { console.error('Insights: failed to load students', e); }
   try {
     const allCampaigns = await listCampaigns();
     campaignList = Array.isArray(allCampaigns) ? allCampaigns : [];
@@ -311,7 +331,6 @@ export async function Insights(root) {
     campaignList = [];
   }
 
-  // Active campaigns (default to all if you don't track "active")
   const activeCampaigns = campaignList.filter(c => c?.active !== false);
 
   // Populate dropdown
@@ -334,16 +353,14 @@ export async function Insights(root) {
   async function renderForCampaign(campaignId) {
     if (!campaignId) return;
 
-    const campaign = await getCampaignById(campaignId); // Supabase-first
+    const campaign = await getCampaignById(campaignId);
     if (!campaign) {
       console.warn('Insights: campaign not found', campaignId);
       return;
     }
 
-    // Build queue like Execute (includes intersection with student_ids)
     const { queueIds, idToStudent } = buildQueueMap(students, campaign);
 
-    // Prefer shared/server progress; fallback to local
     let progress = null;
     try {
       const snap = await loadProgressSnapshotFromSupabase(campaign.id);
@@ -353,7 +370,6 @@ export async function Insights(root) {
       progress = await loadOrInitProgress(campaign.id, queueIds);
     }
 
-    // Derive rows for charts
     const rows = extractRowsForCampaign(progress, idToStudent, { id: campaign.id, name: campaign.name });
 
     // Tally outcomes/survey answers
@@ -363,16 +379,23 @@ export async function Insights(root) {
       counts[key] = (counts[key] || 0) + 1;
     }
 
-    // Rebuild charts
+    // Tear down previous charts
     destroyChart(charts.overall);
     destroyChart(charts.gy);
     destroyChart(charts.hour);
     destroyChart(charts.dow);
 
-    const overallCtx = document.getElementById('overallResponsesChart')?.getContext('2d');
-    const gyCtx      = document.getElementById('responsesByGradYearChart')?.getContext('2d');
-    const hourCtx    = document.getElementById('responsesByHourChart')?.getContext('2d');
-    const dowCtx     = document.getElementById('responsesByDOWChart')?.getContext('2d');
+    // Also forcibly destroy any chart bound to the canvases (robust against earlier errors)
+    destroyChartOnCanvasId('overallResponsesChart');
+    destroyChartOnCanvasId('responsesByGradYearChart');
+    destroyChartOnCanvasId('responsesByHourChart');
+    destroyChartOnCanvasId('responsesByDOWChart');
+
+    // Build fresh contexts and charts
+    const overallCtx = ctxFor('overallResponsesChart');
+    const gyCtx      = ctxFor('responsesByGradYearChart');
+    const hourCtx    = ctxFor('responsesByHourChart');
+    const dowCtx     = ctxFor('responsesByDOWChart');
 
     if (overallCtx) charts.overall = overallResponseBar(overallCtx, counts);
     if (gyCtx)      charts.gy      = answeredByGradYearPie(gyCtx, rows, idToStudent);
@@ -389,4 +412,18 @@ export async function Insights(root) {
   picker.addEventListener('change', async () => {
     await renderForCampaign(picker.value);
   });
+
+  // Cleanup on route change/unmount to prevent lingering charts
+  function cleanup() {
+    destroyChart(charts.overall);
+    destroyChart(charts.gy);
+    destroyChart(charts.hour);
+    destroyChart(charts.dow);
+    destroyChartOnCanvasId('overallResponsesChart');
+    destroyChartOnCanvasId('responsesByGradYearChart');
+    destroyChartOnCanvasId('responsesByHourChart');
+    destroyChartOnCanvasId('responsesByDOWChart');
+    charts = { overall: null, gy: null, hour: null, dow: null };
+  }
+  window.addEventListener('hashchange', cleanup, { once: true });
 }
