@@ -9,7 +9,7 @@ export async function Call(root) {
 
   // --- connection status chip ---
   const supaClient = supa();
-  const statusChip = connChip(supaClient ? 'Connected to Supabase' : 'Offline mode (local save)', !!supaClient);
+  const statusChip = connChip(supaClient ? 'Connected to Database' : 'Offline mode (local save)', !!supaClient);
 
   // --- load students once ---
   let students = [];
