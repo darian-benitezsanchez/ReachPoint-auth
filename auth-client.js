@@ -11,8 +11,10 @@ export async function signIn(email, password) {
   return data;
 }
 
-export async function signOut() {
-  await window.supabase.auth.signOut();
+// NEW: accept { global:true } to revoke all refresh tokens for this user (all devices)
+export async function signOut(opts = {}) {
+  const args = opts.global ? { scope: 'global' } : undefined;
+  await window.supabase.auth.signOut(args);
 }
 
 export async function getSession() {
