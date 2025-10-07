@@ -7,7 +7,6 @@
     <link rel="icon" href="./favicon.ico" />
     <link rel="stylesheet" href="./styles.css" />
 
-    <!-- Minimal layout styles for sidebar UI -->
     <style>
       :root{
         --bg:#f6f7fb; --panel:#ffffff; --ink:#0f172a;
@@ -22,6 +21,8 @@
       .sidebar {
         width: 240px; background: var(--brand); color:#fff; display:flex; flex-direction:column;
         position:sticky; top:0; height:100vh; padding:16px 14px; gap:12px;
+        transition: transform .25s ease, box-shadow .25s ease;
+        z-index: 50;
       }
       .brand { display:flex; align-items:center; gap:10px; font-weight:900; font-size:20px; letter-spacing:.3px; }
       .brand-logo { width:36px; height:36px; border-radius:999px; background:#c7d2fe; }
@@ -37,21 +38,31 @@
       /* Main */
       main#app-root{
         flex:1; padding:20px; max-width:1400px; margin:0 auto; width:100%;
+        transition: margin-left .25s ease;
       }
-      /* Content bars & cards */
+
+      /* Mobile toggle button (appears on small screens) */
+      .side-toggle {
+        display:none; border:1px solid var(--ring); background:#fff; border-radius:10px;
+        padding:10px 12px; font-weight:900; cursor:pointer;
+      }
+
+      /* Scrim for mobile */
+      .scrim {
+        position: fixed; inset: 0; background: rgba(2,6,23,.35);
+        opacity: 0; pointer-events: none; transition: opacity .2s ease; z-index: 40;
+      }
+      .scrim.show { opacity: 1; pointer-events: auto; }
+
+      /* Content/bar/cards (unchanged from previous) */
       .content-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
       .title { font-size:28px; font-weight:900; letter-spacing:.2px; }
       .row { display:flex; gap:10px; align-items:center; }
       .btn { appearance:none; border:1px solid var(--ring); padding:10px 14px; border-radius:10px; background:#fff; font-weight:800; cursor:pointer; }
       .btn-primary { background:var(--accent); border-color:var(--accent); color:#062b12; }
       .btn-ghost { background:#fff; }
-      .grid-3 {
-        display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:14px; margin-bottom:16px;
-      }
-      .stat-card {
-        background:var(--panel); border:1px solid var(--ring); border-radius:14px; padding:16px;
-        display:flex; flex-direction:column; gap:6px; box-shadow:0 2px 6px rgba(0,0,0,.04);
-      }
+      .grid-3 { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:14px; margin-bottom:16px; }
+      .stat-card { background:var(--panel); border:1px solid var(--ring); border-radius:14px; padding:16px; display:flex; flex-direction:column; gap:6px; box-shadow:0 2px 6px rgba(0,0,0,.04); }
       .stat-label { color:var(--muted); font-size:12px; font-weight:800; letter-spacing:.5px; text-transform:uppercase; }
       .stat-value { font-size:28px; font-weight:900; }
       .list { display:grid; grid-template-columns:1fr; gap:14px; }
@@ -59,54 +70,51 @@
       .card-head { width:100%; display:flex; gap:12px; align-items:center; padding:14px 16px; background:#fff; border-bottom:1px solid var(--ring); cursor:pointer; }
       .card-head:hover { background:#f9fafb; }
       .card-title { font-weight:900; }
-      .card-sub { color:var(--muted); font-size:12px; }
-      .card-reminders { color:var(--muted); font-size:12px; }
+      .card-sub, .card-reminders { color:var(--muted); font-size:12px; }
       .actions { display:flex; gap:8px; padding:12px 16px; }
       .icon.danger{ border:none; background:transparent; cursor:pointer; font-size:16px; }
       .toast{ position:fixed; bottom:16px; right:16px; background:#111827; color:#fff; padding:10px 14px; border-radius:10px; }
+
+      /* Responsive: convert sidebar to slide-in drawer on narrow screens */
       @media (max-width: 900px){
-        .sidebar{ position:fixed; transform:translateX(0); z-index:50; height:100dvh; }
-        main#app-root{ margin-left:240px; }
+        .sidebar{
+          position: fixed; left:0; top:0; height:100dvh; transform: translateX(-102%);
+          box-shadow: 0 8px 28px rgba(0,0,0,.25);
+        }
+        .sidebar.open { transform: translateX(0); }
+        .side-toggle{ display:inline-flex; align-items:center; gap:8px; }
+        main#app-root{ margin-left:0; padding:16px; }
         .grid-3 { grid-template-columns:1fr; }
       }
-      @media (max-width: 720px){
-        .sidebar{ width:210px; }
-        main#app-root{ margin-left:210px; padding:14px; }
+
+      /* Wide screens keep the sidebar docked */
+      @media (min-width: 901px){
+        .sidebar { transform:none !important; }
       }
     </style>
 
     <!-- Supabase JS v2 -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-
     <script>
-      // ===== DEV ONLY: Inject your ReachPoint-dev credentials =====
       window.__SUPABASE_URL__ = "https://qmhxpugetaksrktyfmji.supabase.co";
       window.__SUPABASE_ANON_KEY__ = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtaHhwdWdldGFrc3JrdHlmbWppIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg3NjA0NzYsImV4cCI6MjA3NDMzNjQ3Nn0.-pS4lHZKwxiVh3XL191_IMcZ-JvESva3zo2elTfSDGg";
-
       (function initSupabase() {
         try {
-          const url = window.__SUPABASE_URL__;
-          const key = window.__SUPABASE_ANON_KEY__;
-          if (!url || !key) return;
-
-          const client = supabase.createClient(url, key, {
+          const client = supabase.createClient(window.__SUPABASE_URL__, window.__SUPABASE_ANON_KEY__, {
             auth: { persistSession: true, autoRefreshToken: true },
             global: { headers: { "x-reachpoint-env": "dev" } },
           });
           window.supabase = client;
           window.hasSupabase = () => !!(window.supabase && typeof window.supabase.from === "function");
-          console.log("[ReachPoint] Supabase client initialized:", window.hasSupabase());
-        } catch (e) {
-          console.error("[ReachPoint] Failed to init Supabase; local-only fallback.", e);
-        }
+        } catch (e) { console.error("[ReachPoint] Supabase init failed", e); }
       })();
     </script>
   </head>
 
   <body>
     <div class="app-shell">
-      <!-- Sidebar -->
-      <aside class="sidebar">
+      <!-- Slide-in Sidebar -->
+      <aside class="sidebar" id="sidebar" aria-label="Primary" aria-hidden="false">
         <div class="brand">
           <div class="brand-logo"></div>
           ReachPoint
@@ -123,21 +131,72 @@
         <a class="logout" href="#/login" data-logout>Log out</a>
       </aside>
 
+      <!-- Dark scrim for mobile -->
+      <div class="scrim" id="scrim" hidden></div>
+
       <!-- Main content -->
       <main id="app-root">
-        <!-- Your SPA will render into #app via app.js -->
+        <div class="content-head">
+          <h1 class="title">Dashboard</h1>
+          <!-- Mobile toggle button -->
+          <button id="sideToggle" class="side-toggle" type="button" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false">☰ Menu</button>
+        </div>
+
+        <!-- Your SPA renders into #app -->
         <div id="app"></div>
       </main>
     </div>
 
-    <!-- Default route BEFORE app loads -->
     <script>
+      // Default route BEFORE app loads
       if (!location.hash || !/^#\//.test(location.hash)) {
         location.hash = "#/dashboard";
       }
+
+      // Sidebar open/close logic for mobile
+      (function sidebarDrawer(){
+        const sidebar = document.getElementById('sidebar');
+        const scrim   = document.getElementById('scrim');
+        const toggle  = document.getElementById('sideToggle');
+
+        function isMobile(){ return window.matchMedia('(max-width: 900px)').matches; }
+        function isOpen(){ return sidebar.classList.contains('open'); }
+
+        function open() {
+          if (!isMobile()) return;
+          sidebar.classList.add('open');
+          toggle.setAttribute('aria-expanded', 'true');
+          scrim.hidden = false;
+          // allow transition
+          requestAnimationFrame(() => scrim.classList.add('show'));
+        }
+        function close() {
+          sidebar.classList.remove('open');
+          toggle.setAttribute('aria-expanded', 'false');
+          scrim.classList.remove('show');
+          // hide after fade
+          setTimeout(() => { if (!isOpen()) scrim.hidden = true; }, 200);
+        }
+        function toggleMenu(){ isOpen() ? close() : open(); }
+
+        // Button toggle
+        toggle.addEventListener('click', toggleMenu);
+
+        // Close on outside tap
+        scrim.addEventListener('pointerdown', close);
+
+        // Close on route change or Esc
+        window.addEventListener('hashchange', close);
+        document.addEventListener('keydown', (e)=>{ if (e.key === 'Escape' && isOpen()) close(); });
+
+        // If resizing to wide layout, ensure sidebar is visible and scrim hidden
+        window.addEventListener('resize', () => {
+          if (!isMobile()) { close(); scrim.hidden = true; }
+        });
+      })();
     </script>
 
-    <!-- Your app bundle -->
+    <!-- Your SPA bundle -->
     <script type="module" src="./app.js"></script>
   </body>
 </html>
