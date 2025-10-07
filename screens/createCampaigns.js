@@ -71,9 +71,9 @@ export function CreateCampaign(root) {
       page.append(
         h1('Create Campaign'),
         div('sectionTitle', 'Optional: Add a call question'),
-        p('Collect lightweight call outcomes (e.g., “Yes / No / Maybe”). You can skip this if you don’t need to capture responses.', 'muted'),
+        p('What do you want to ask your contacts?', 'muted'),
         row(
-          pillToggle('Collect responses', collectResponses, () => { collectResponses = true; render(); }),
+          pillToggle('Include Question', collectResponses, () => { collectResponses = true; render(); }),
           pillToggle('Skip', !collectResponses, () => { collectResponses = false; render(); })
         ),
         label('Question to ask'),

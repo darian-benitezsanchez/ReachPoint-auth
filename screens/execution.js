@@ -326,9 +326,15 @@ export async function Execute(root, campaignInput) {
           async ()=>{ await beginMissed(); },
           ()=>{ location.hash='#/dashboard'; }
         )
-          .then(b=>wrap.append(b))
+          .then(b => {
+            wrap.append(b);
+            // ⬇️ New: Follow Up panel (uses local 'progress' + 'idToStudent' only)
+            const panel = buildFollowUpPanel(progress, idToStudent);
+            wrap.append(panel);
+          })
           .catch(err=>wrap.append(errorBox(err)));
       }
+
 
       root.innerHTML=''; root.append(wrap);
     } catch (err) {
@@ -750,3 +756,180 @@ function mergeProgress(local, remote) {
 
   return out;
 }
+
+/* ======================= Follow Up panel (no new Supabase calls) ======================= */
+function buildFollowUpPanel(progressSnapshot, idToStudent) {
+  const container = div('', { maxWidth: '950px', margin: '16px auto 32px', width: '100%' });
+
+  const title = h2('Follow Up', 'summaryTitle');
+  title.style.fontWeight = '800';
+  title.style.textAlign = 'center';
+  title.style.margin = '20px 0 10px';
+
+  // Controls
+  const controls = div('', {
+    display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center', marginBottom: '10px'
+  });
+
+  const outcomeSel = document.createElement('select');
+  outcomeSel.innerHTML = `
+    <option value="">Any outcome</option>
+    <option value="answered">Answered</option>
+    <option value="no_answer">No answer</option>
+  `;
+  outcomeSel.style.padding = '8px 10px';
+  outcomeSel.style.border = '1px solid #d1d5db';
+  outcomeSel.style.borderRadius = '8px';
+
+  const surveyInp = document.createElement('input');
+  surveyInp.type = 'text';
+  surveyInp.placeholder = 'Survey answer contains… (optional)';
+  Object.assign(surveyInp.style, {
+    padding: '8px 10px',
+    border: '1px solid #d1d5db',
+    borderRadius: '8px',
+    minWidth: '240px'
+  });
+
+  const resultInfo = ptext('', 'muted');
+
+  const exportBtn = button('Export Follow-Up CSV', 'btn btn-primary', () => {
+    const rows = computeMatches();
+    const csv = followUpCsv(rows);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'follow-up.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  controls.append(outcomeSel, surveyInp, exportBtn);
+
+  // Results table
+  const table = document.createElement('table');
+  table.style.width = '100%';
+  table.style.borderCollapse = 'collapse';
+  table.style.background = '#fff';
+  table.style.border = '1px solid #e5e7eb';
+  table.style.borderRadius = '12px';
+  table.style.overflow = 'hidden';
+  table.createTHead().innerHTML = `
+    <tr style="background:#f9fafb;text-align:left;">
+      <th style="padding:10px 12px;border-bottom:1px solid #e5e7eb;">Name</th>
+      <th style="padding:10px 12px;border-bottom:1px solid #e5e7eb;">Phone</th>
+      <th style="padding:10px 12px;border-bottom:1px solid #e5e7eb;">Outcome</th>
+      <th style="padding:10px 12px;border-bottom:1px solid #e5e7eb;">Answer</th>
+      <th style="padding:10px 12px;border-bottom:1px solid #e5e7eb;">Last Called</th>
+      <th style="padding:10px 12px;border-bottom:1px solid #e5e7eb;">Call</th>
+    </tr>
+  `;
+  const tbody = table.createTBody();
+
+  function computeMatches() {
+    const contacts = (progressSnapshot && progressSnapshot.contacts) || {};
+    const wantOutcome = outcomeSel.value;
+    const q = surveyInp.value.trim().toLowerCase();
+
+    const rows = [];
+    for (const [id, c] of Object.entries(contacts)) {
+      if (wantOutcome && c.outcome !== wantOutcome) continue;
+      if (q && !String(c.surveyAnswer || '').toLowerCase().includes(q)) continue;
+
+      const stu = idToStudent[id] || {};
+      rows.push({
+        id,
+        name: String(stu.full_name || stu.name || '').trim() || '(Unnamed)',
+        phone: guessPhoneFromStudent(stu),
+        outcome: c.outcome || '',
+        answer: c.surveyAnswer || '',
+        lastCalledAt: c.lastCalledAt || 0
+      });
+    }
+    return rows.sort((a,b)=>(b.lastCalledAt||0) - (a.lastCalledAt||0));
+  }
+
+  function renderRows() {
+    const rows = computeMatches();
+    resultInfo.textContent = `${rows.length} contact${rows.length===1?'':'s'} match the filter`;
+    tbody.innerHTML = '';
+    rows.slice(0, 200).forEach(r => {
+      const tr = tbody.insertRow();
+
+      const tdName = tr.insertCell();
+      tdName.style.padding = '10px 12px';
+      tdName.textContent = r.name;
+
+      const tdPhone = tr.insertCell();
+      tdPhone.style.padding = '10px 12px';
+      const tel = toTelHref(r.phone);
+      tdPhone.textContent = r.phone ? humanPhone(r.phone) : '—';
+
+      const tdOutcome = tr.insertCell();
+      tdOutcome.style.padding = '10px 12px';
+      tdOutcome.textContent = r.outcome || '—';
+
+      const tdAns = tr.insertCell();
+      tdAns.style.padding = '10px 12px';
+      tdAns.textContent = r.answer || '—';
+
+      const tdTime = tr.insertCell();
+      tdTime.style.padding = '10px 12px';
+      tdTime.textContent = r.lastCalledAt ? new Date(r.lastCalledAt).toLocaleString() : '—';
+
+      const tdCall = tr.insertCell();
+      tdCall.style.padding = '10px 12px';
+      if (tel) {
+        const a = document.createElement('a');
+        a.href = tel;
+        a.textContent = 'Call';
+        a.className = 'btn';
+        a.addEventListener('click', (e)=>{ e.preventDefault(); window.location.href = tel; });
+        tdCall.append(a);
+      } else {
+        tdCall.textContent = '—';
+      }
+    });
+  }
+
+  outcomeSel.addEventListener('change', renderRows);
+  surveyInp.addEventListener('input', renderRows);
+
+  renderRows();
+
+  const top = div('', { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'6px' });
+  const left = div('', { fontWeight:'700' }, 'Filter follow-ups by outcome and/or survey answer');
+  top.append(left, resultInfo);
+
+  container.append(title, top, controls, table);
+  return container;
+}
+
+/* Heuristic: try to find a phone field on the student object */
+function guessPhoneFromStudent(stu) {
+  const keys = Object.keys(stu||{});
+  const pri = ['mobile_phone','phone','phone_number','Mobile Phone*','Cell Phone','Student Phone'];
+  for (const k of pri) if (stu[k]) return stu[k];
+  for (const k of keys) if (/phone|mobile|cell/i.test(k) && stu[k]) return stu[k];
+  return '';
+}
+
+/* Build a tiny CSV from rows returned by computeMatches() */
+function followUpCsv(rows) {
+  const headers = ['name','phone','outcome','answer','last_called_at','student_id'];
+  const esc = (v)=> {
+    const s = String(v ?? '');
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+  };
+  const head = headers.map(esc).join(',');
+  const body = rows.map(r => [
+    esc(r.name),
+    esc(r.phone),
+    esc(r.outcome||''),
+    esc(r.answer||''),
+    esc(r.lastCalledAt ? new Date(r.lastCalledAt).toISOString() : ''),
+    esc(r.id)
+  ].join(',')).join('\n');
+  return head + '\n' + body;
+}
+/* ===================== end Follow Up panel helpers ===================== */
