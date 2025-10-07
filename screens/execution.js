@@ -246,6 +246,179 @@ export async function Execute(root, campaignInput) {
     );
   }
 
+
+  function getDbStudentId(idFromQueue) {
+  // Map your queue id to the DB student id used in your tables
+  const stu = idToStudent[idFromQueue] || {};
+  return stu.id ?? stu.student_id ?? stu.uuid ?? idFromQueue;
+  }
+
+  async function loadAndRenderInteractions(mount, contactId) {
+    mount.innerHTML = '';
+    const box = document.createElement('details');
+    box.open = false;
+
+    const sum = document.createElement('summary');
+    sum.textContent = 'Interaction History';
+    Object.assign(sum.style, {
+      cursor: 'pointer',
+      fontWeight: '700',
+      padding: '8px 10px',
+      border: '1px solid #e5e7eb',
+      borderRadius: '10px',
+      background: '#f9fafb'
+    });
+    box.append(sum);
+
+    const body = div('', { padding: '10px 0' });
+    box.append(body);
+    mount.append(box);
+
+    const loading = ptext('Loading interactions…', 'muted');
+    Object.assign(loading.style, { padding: '8px 2px' });
+    body.append(loading);
+
+    try {
+      const cid = getDbStudentId(contactId);
+
+      // ---------- call_progress (by contact_id) ----------
+      const { data: cpRows, error: cpErr } = await window.supabase
+        .from('call_progress')
+        .select('campaign_id, attempts, outcome, last_called_at')
+        .eq('contact_id', cid)
+        .order('last_called_at', { ascending: false })
+        .limit(100);
+      if (cpErr) throw cpErr;
+
+      // Campaign names for those campaign_ids
+      const campaignIds = [...new Set((cpRows || []).map(r => r.campaign_id).filter(Boolean))];
+      const { data: campRows, error: campErr } = campaignIds.length
+        ? await window.supabase.from('campaigns').select('id,name').in('id', campaignIds)
+        : { data: [], error: null };
+      if (campErr) throw campErr;
+      const campNameById = new Map((campRows || []).map(r => [r.id, r.name]));
+
+      // Survey answers (by contact_id + campaign_id)
+      const { data: srRows, error: srErr } = campaignIds.length
+        ? await window.supabase.from('survey_responses')
+            .select('campaign_id, contact_id, answer')
+            .eq('contact_id', cid)
+            .in('campaign_id', campaignIds)
+        : { data: [], error: null };
+      if (srErr) throw srErr;
+      const answerByCamp = new Map((srRows || []).map(r => [r.campaign_id, r.answer]));
+
+      // ---------- single_calls (by student_id) ----------
+      const { data: scRows, error: scErr } = await window.supabase
+        .from('single_calls')
+        .select('caller, occurred_at, notes')
+        .eq('student_id', cid) // ⬅️ IMPORTANT: student_id (not contact_id)
+        .order('occurred_at', { ascending: false })
+        .limit(100);
+      if (scErr) throw scErr;
+
+      // ---------- Render: call_progress ----------
+      body.innerHTML = '';
+      body.append(h2('Campaign call activity', 'summaryTitle'));
+      const cpTable = document.createElement('table');
+      cpTable.style.width = '100%';
+      cpTable.style.borderCollapse = 'collapse';
+      cpTable.style.marginBottom = '10px';
+      cpTable.style.background = '#fff';
+      cpTable.style.border = '1px solid #e5e7eb';
+      cpTable.style.borderRadius = '10px';
+      cpTable.style.overflow = 'hidden';
+      cpTable.createTHead().innerHTML = `
+        <tr style="background:#f3f4f6;text-align:left">
+          <th style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">Campaign</th>
+          <th style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">Attempts</th>
+          <th style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">Outcome</th>
+          <th style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">Answer</th>
+          <th style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">Last Called</th>
+        </tr>
+      `;
+      const cpBody = cpTable.createTBody();
+
+      (cpRows || []).forEach(r => {
+        const tr = cpBody.insertRow();
+        const td = (text) => {
+          const cell = tr.insertCell();
+          cell.style.padding = '8px 10px';
+          cell.textContent = text ?? '—';
+          return cell;
+        };
+        td(campNameById.get(r.campaign_id) || r.campaign_id);
+        td(String(r.attempts ?? '—'));
+        td(r.outcome || '—');
+        td(answerByCamp.get(r.campaign_id) || '—');
+        td(r.last_called_at ? new Date(r.last_called_at).toLocaleString() : '—');
+      });
+
+      if (!cpRows || cpRows.length === 0) {
+        body.append(ptext('No campaign call activity found for this contact.', 'muted'));
+      } else {
+        body.append(cpTable);
+      }
+
+      // ---------- Render: single_calls ----------
+      body.append(h2('Direct calls', 'summaryTitle'));
+      const scTable = document.createElement('table');
+      scTable.style.width = '100%';
+      scTable.style.borderCollapse = 'collapse';
+      scTable.style.background = '#fff';
+      scTable.style.border = '1px solid #e5e7eb';
+      scTable.style.borderRadius = '10px';
+      scTable.style.overflow = 'hidden';
+      scTable.createTHead().innerHTML = `
+        <tr style="background:#f3f4f6;text-align:left">
+          <th style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">Caller</th>
+          <th style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">Occurred At</th>
+          <th style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">Notes</th>
+        </tr>
+      `;
+      const scBody = scTable.createTBody();
+
+      (scRows || []).forEach(r => {
+        const tr = scBody.insertRow();
+        const td = (nodeOrText) => {
+          const cell = tr.insertCell();
+          cell.style.padding = '8px 10px';
+          if (nodeOrText instanceof Node) cell.append(nodeOrText);
+          else cell.textContent = nodeOrText ?? '—';
+          return cell;
+        };
+        td(r.caller || '—');
+        td(r.occurred_at ? new Date(r.occurred_at).toLocaleString() : '—');
+
+        const notes = String(r.notes || '').trim();
+        if (!notes) { td('—'); }
+        else if (notes.length <= 140) { td(notes); }
+        else {
+          const d = document.createElement('details');
+          const s = document.createElement('summary');
+          s.textContent = notes.slice(0, 140) + '…';
+          d.append(s, document.createTextNode(notes));
+          td(d);
+        }
+      });
+
+      if (!scRows || scRows.length === 0) {
+        body.append(ptext('No direct call records found for this contact.', 'muted'));
+      } else {
+        body.append(scTable);
+      }
+    } catch (err) {
+      body.innerHTML = '';
+      const errBox = div('', { color: '#b91c1c', padding: '6px 2px' },
+        `Could not load interaction history.`
+      );
+      body.append(errBox);
+      console.warn('[interactions] load error', err);
+    }
+  }
+
+
+
   // ─── render is async so survey/notes are present BEFORE drawing ───
   async function render() {
     try {
@@ -309,13 +482,20 @@ export async function Execute(root, campaignInput) {
         );
 
         // Pretty details + survey + notes
+        const interactionsMount = div('', { margin: '8px 0 10px' }); // ⬅️ NEW
+
         card.append(
           headerBox,
           prettyDetails(stu),
+          interactionsMount, // ⬅️ NEW: interactions dropdown goes here
           surveyBlock(campaign.survey, selectedSurveyAnswer, onSelectSurvey),
           notesBlock(currentNotes, onChangeNotes),
           actions
         );
+
+        // Load interactions async (don’t block UI)
+        loadAndRenderInteractions(interactionsMount, currentId).catch(()=>{ /* no-op */ }); // ⬅️ NEW
+
 
         wrap.append(card);
       }
