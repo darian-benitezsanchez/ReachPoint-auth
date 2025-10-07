@@ -325,9 +325,9 @@ export async function Call(root) {
     }
 
     // Header row (table feel)
-    const head = div('callsTableHead');
-    head.append(div('', 'Student'), div('', 'Caller'), div('', 'Time'));
-    recentListMount.append(head);
+    //const head = div('callsTableHead');
+    //head.append(div('', 'Student'), div('', 'Caller'), div('', 'Time'));
+    //recentListMount.append(head);
 
     for (const c of calls) {
       const when = c.occurred_at ? new Date(c.occurred_at).toLocaleString() : '';
