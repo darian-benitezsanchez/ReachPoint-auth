@@ -329,7 +329,7 @@ export async function Execute(root, campaignInput) {
           .then(b => {
             wrap.append(b);
             // ⬇️ New: Follow Up panel (uses local 'progress' + 'idToStudent' only)
-            const panel = buildFollowUpPanel(progress, idToStudent);
+            const panel = buildFollowUpPanel(progress, idToStudent, campaign);
             wrap.append(panel);
           })
           .catch(err=>wrap.append(errorBox(err)));
@@ -644,7 +644,7 @@ export async function Execute(root, campaignInput) {
   }
 
   /* ======================= Follow Up panel (no new Supabase calls) ======================= */
-function buildFollowUpPanel(progressSnapshot, idToStudent) {
+function buildFollowUpPanel(progressSnapshot, idToStudent, campaign) {
   const container = div('', { maxWidth: '950px', margin: '16px auto 32px', width: '100%' });
 
   const title = h2('Follow Up', 'summaryTitle');
@@ -679,18 +679,49 @@ function buildFollowUpPanel(progressSnapshot, idToStudent) {
 
   const resultInfo = ptext('', 'muted');
 
-  const exportBtn = button('Export Follow-Up CSV', 'btn btn-primary', () => {
-    const rows = computeMatches();
-    const csv = followUpCsv(rows);
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'follow-up.csv';
-    a.click();
-    URL.revokeObjectURL(a.href);
-  });
+  const createBtn = button('Create Follow-Up Campaign', 'btn btn-primary', async () => {
+      const rows = computeMatches();
+      if (!rows.length) {
+        alert('No matching contacts for follow-up.');
+        return;
+      }
 
-  controls.append(outcomeSel, surveyInp, exportBtn);
+      // Derive new campaign name
+      const originalName = campaign?.name || '(Unnamed Campaign)';
+      const newName = `[Follow Up] ${originalName}`;
+
+      // Extract just the student IDs
+      const student_ids = rows.map(r => String(r.id));
+
+      try {
+        // Insert into Supabase (same table as campaigns)
+        const { data, error } = await window.supabase
+          .from('campaigns')
+          .insert({
+            name: newName,
+            created_at: new Date().toISOString(),
+            student_ids,
+            filters: [
+              { field: 'outcome', op: '=', value: outcomeSel.value || 'any' },
+              { field: 'surveyAnswer', op: 'contains', value: surveyInp.value || '' }
+            ],
+            source_campaign_id: campaign.id
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        alert(`✅ Created new follow-up campaign:\n${data.name}`);
+        location.hash = `#/execute/${data.id}`; // jump straight into new campaign
+      } catch (err) {
+        console.error('[FollowUp] failed to create campaign', err);
+        alert('❌ Could not create follow-up campaign. Check console for details.');
+      }
+    });
+
+
+  controls.append(outcomeSel, surveyInp, createBtn);
 
   // Results table
   const table = document.createElement('table');
