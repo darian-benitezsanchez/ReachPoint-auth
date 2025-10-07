@@ -253,6 +253,12 @@ export async function Execute(root, campaignInput) {
   return stu.id ?? stu.student_id ?? stu.uuid ?? idFromQueue;
   }
 
+  // ---- helpers (top-level) ----
+  function isUuid(v) {
+    return typeof v === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+  }
+
   async function loadAndRenderInteractions(mount, contactId) {
     mount.innerHTML = '';
     const box = document.createElement('details');
@@ -307,14 +313,16 @@ export async function Execute(root, campaignInput) {
 
 
       // Survey answers (by contact_id + campaign_id)
-      const { data: srRows, error: srErr } = campaignIds.length
+      // Survey answers (by contact_id + campaign_id)
+      const { data: srRows, error: srErr } = uuidCampaignIds.length
         ? await window.supabase.from('survey_responses')
             .select('campaign_id, contact_id, answer')
             .eq('contact_id', cid)
-            .in('campaign_id', campaignIds)
+            .in('campaign_id', uuidCampaignIds)
         : { data: [], error: null };
       if (srErr) throw srErr;
       const answerByCamp = new Map((srRows || []).map(r => [r.campaign_id, r.answer]));
+
 
       // ---------- single_calls (by student_id) ----------
       const { data: scRows, error: scErr } = await window.supabase
@@ -500,12 +508,6 @@ export async function Execute(root, campaignInput) {
           notesBlock(currentNotes, onChangeNotes),
           actions
         );
-
-        function isUuid(v) {
-          return typeof v === 'string' &&
-            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
-        }
-
         
         // Load interactions async (don’t block UI)
         loadAndRenderInteractions(interactionsMount, currentId).catch(()=>{ /* no-op */ }); // ⬅️ NEW
