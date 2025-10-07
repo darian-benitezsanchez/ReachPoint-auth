@@ -7,17 +7,66 @@
     <link rel="icon" href="./favicon.ico" />
     <link rel="stylesheet" href="./styles.css" />
 
+    <!-- Small add-on styles for the mobile dropdown -->
+    <style>
+      /* Base: hide hamburger on wide screens */
+      .menu-btn { display:none; }
+
+      /* Mobile menu container (hidden by default via [hidden]) */
+      .mobile-menu {
+        position: absolute;
+        right: 12px;
+        top: 56px;          /* just below topbar */
+        background: #ffffff;
+        border: 1px solid #cbd5e1;
+        border-radius: 12px;
+        box-shadow: 0 12px 24px rgba(2,6,23,.12);
+        padding: 8px;
+        display: flex;
+        flex-direction: column;
+        min-width: 180px;
+        z-index: 60;
+      }
+      .mobile-menu a {
+        display: block;
+        padding: 10px 12px;
+        border-radius: 8px;
+        text-decoration: none;
+        color: #1d4ed8; /* ink */
+        font-weight: 700;
+      }
+      .mobile-menu a:hover { background: #f1f5f9; }
+
+      /* On small screens: hide desktop nav, show hamburger */
+      @media (max-width: 720px) {
+        header .nav { display: none; }
+        .menu-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          padding: 8px 10px;
+          border-radius: 10px;
+          border: 1px solid #cbd5e1;
+          background: #e2e8f0;
+          color: #0f172a;
+          font-weight: 800;
+          cursor: pointer;
+        }
+        .menu-btn:active { transform: translateY(1px); }
+      }
+    </style>
+
     <!-- Supabase JS v2 -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
     <script>
       // ===== DEV ONLY: Inject your ReachPoint-dev credentials =====
       // NOTE: Use env vars / server proxy for prod builds.
-      window.__SUPABASE_URL__ = "https://qmhxpugetaksrktyfmji.supabase.co";  // <-- replace with real URL
-      window.__SUPABASE_ANON_KEY__ = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtaHhwdWdldGFrc3JrdHlmbWppIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg3NjA0NzYsImV4cCI6MjA3NDMzNjQ3Nn0.-pS4lHZKwxiVh3XL191_IMcZ-JvESva3zo2elTfSDGg";                      // <-- replace with anon key
+      window.__SUPABASE_URL__ = "https://qmhxpugetaksrktyfmji.supabase.co";
+      window.__SUPABASE_ANON_KEY__ = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtaHhwdWdldGFrc3JrdHlmbWppIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg3NjA0NzYsImV4cCI6MjA3NDMzNjQ3Nn0.-pS4lHZKwxiVh3XL191_IMcZ-JvESva3zo2elTfSDGg";
 
       // Create a single shared Supabase client for the whole app.
-      // IMPORTANT: Do NOT short-circuit with "window.supabase ||".
       (function initSupabase() {
         try {
           const url = window.__SUPABASE_URL__;
@@ -26,7 +75,7 @@
 
           const client = supabase.createClient(url, key, {
             auth: {
-              persistSession: true,        // <-- was false
+              persistSession: true,
               autoRefreshToken: true
             },
             global: { headers: { "x-reachpoint-env": "dev" } },
@@ -43,14 +92,28 @@
   </head>
 
   <body>
-    <header class="topbar">
+    <header class="topbar" style="position:sticky;top:0;z-index:50;">
       <div class="brand">ReachPoint</div>
+
+      <!-- Hamburger button appears on small screens -->
+      <button class="menu-btn"
+              type="button"
+              aria-label="Open Menu"
+              aria-controls="mobileMenu"
+              aria-expanded="false">
+        ☰ Menu
+      </button>
+
+      <!-- Desktop nav (unchanged; app.js manages auth visibility + logout here) -->
       <nav class="nav">
         <a href="#/dashboard">Dashboard</a>
         <a href="#/create">New Campaign</a>
         <a href="#/call">Call Anyone</a>
         <a href="#/insights">Insights</a>
       </nav>
+
+      <!-- Mobile dropdown menu (links cloned from desktop nav at open time) -->
+      <div id="mobileMenu" class="mobile-menu" hidden></div>
     </header>
 
     <!-- App root -->
@@ -61,6 +124,75 @@
       if (!location.hash || !/^#\//.test(location.hash)) {
         location.hash = "#/dashboard";
       }
+
+      // === Mobile menu behavior ===
+      (function mobileMenuInit() {
+        const btn = document.querySelector('.menu-btn');
+        const menu = document.getElementById('mobileMenu');
+        const srcNav = document.querySelector('header .nav');
+
+        if (!btn || !menu || !srcNav) return;
+
+        // Clone the current links from the desktop nav into the mobile menu
+        function syncMobileMenu() {
+          menu.innerHTML = '';
+          srcNav.querySelectorAll('a').forEach(a => {
+            const clone = a.cloneNode(true);
+            menu.appendChild(clone);
+          });
+        }
+
+        // Keep mobile menu in sync when app.js injects/removes nav items (e.g., Logout)
+        const obs = new MutationObserver(() => {
+          if (!menu.hidden) syncMobileMenu();
+        });
+        obs.observe(srcNav, { childList: true, subtree: true });
+
+        // Toggle open/close
+        btn.addEventListener('click', () => {
+          const isOpen = btn.getAttribute('aria-expanded') === 'true';
+          if (isOpen) {
+            btn.setAttribute('aria-expanded', 'false');
+            menu.hidden = true;
+          } else {
+            syncMobileMenu();
+            btn.setAttribute('aria-expanded', 'true');
+            menu.hidden = false;
+          }
+        });
+
+        // Close on link click (route change)
+        menu.addEventListener('click', (e) => {
+          const a = e.target.closest('a[href^="#/"]');
+          if (!a) return;
+          btn.setAttribute('aria-expanded', 'false');
+          menu.hidden = true;
+        });
+
+        // Close when hash changes (navigated programmatically)
+        window.addEventListener('hashchange', () => {
+          btn.setAttribute('aria-expanded', 'false');
+          menu.hidden = true;
+        });
+
+        // Close if viewport gets large again
+        window.addEventListener('resize', () => {
+          if (window.innerWidth > 720) {
+            btn.setAttribute('aria-expanded', 'false');
+            menu.hidden = true;
+          }
+        });
+
+        // Click outside to close
+        document.addEventListener('click', (e) => {
+          if (menu.hidden) return;
+          const inside = e.target === menu || menu.contains(e.target) || e.target === btn;
+          if (!inside) {
+            btn.setAttribute('aria-expanded', 'false');
+            menu.hidden = true;
+          }
+        });
+      })();
     </script>
 
     <!-- Your app bundle -->
