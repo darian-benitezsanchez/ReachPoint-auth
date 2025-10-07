@@ -119,26 +119,54 @@ async function sbLoadProgressLatest(campaignId){
   return { rows: Array.from(byStudent.values()), from: 'table', viewErr };
 }
 
-/** Latest survey answers (if not already present in progress rows) */
+/** Latest survey answers (if not already present in progress rows)
+ * Tries contact_id first (common), then falls back to student_id.
+ */
 async function sbLatestSurveyAnswers(campaignId, studentIds){
   if (!studentIds.length) return new Map();
   const cid = String(campaignId);
   const ids = uniq(studentIds).filter(Boolean);
   const out = new Map();
   const CHUNK = 500;
-  for (let i=0;i<ids.length;i+=CHUNK){
-    const slice = ids.slice(i, i+CHUNK);
+
+  // helper to run one shape
+  const fetchChunk = async (slice, idCol) => {
     const { data, error } = await window.supabase
       .from('survey_responses')
-      .select('student_id,answer,created_at')
+      .select(`${idCol},answer,created_at`)
       .eq('campaign_id', cid)
-      .in('student_id', slice);
+      .in(idCol, slice);
     if (error) throw error;
     for (const r of (data || [])){
-      const sid = String(r.student_id ?? r.contact_id ?? '');
+      const sid = String(r[idCol] ?? '');
+      if (!sid) continue;
       const ts = toDateSafe(r.created_at)?.getTime() || 0;
       const prev = out.get(sid);
       if (!prev || ts > prev.ts){ out.set(sid, { answer: r.answer, ts }); }
+    }
+  };
+
+  for (let i=0;i<ids.length;i+=CHUNK){
+    const slice = ids.slice(i, i+CHUNK);
+
+    // try contact_id first
+    try {
+      await fetchChunk(slice, 'contact_id');
+      continue; // success with contact_id
+    } catch (e1) {
+      // if it's a missing column error, try student_id
+      if (e1?.code === '42703') {
+        try {
+          await fetchChunk(slice, 'student_id'); // some schemas use student_id
+          continue;
+        } catch (e2) {
+          // surface the second error if it's not also a 42703
+          if (e2?.code !== '42703') throw e2;
+          // both columns missing — nothing we can do
+        }
+      } else {
+        throw e1; // a real error (RLS, etc.)
+      }
     }
   }
   return out;
@@ -343,7 +371,7 @@ export async function Insights(root) {
 
   // Populate picker (no active filtering)
   picker.innerHTML = '';
-  const active = campaigns; // as requested — no filtering
+  const active = campaigns; // no filtering
   if (!active.length){
     const opt = document.createElement('option');
     opt.value = ''; opt.textContent = 'No campaigns';
@@ -374,7 +402,7 @@ export async function Insights(root) {
     const progressRows = latest.rows || [];
     if (!progressRows.length){
       showEmpty('No call data yet — once you record outcomes, stats will appear here.');
-      // Draw zeroed charts for clarity
+      // Draw zeroed chart for clarity
       destroyChart(charts.overall); destroyChart(charts.gy); destroyChart(charts.hour); destroyChart(charts.dow);
       destroyChartOnCanvasId('overallResponsesChart'); destroyChartOnCanvasId('responsesByGradYearChart'); destroyChartOnCanvasId('responsesByHourChart'); destroyChartOnCanvasId('responsesByDOWChart');
       const zCounts = { answered:0, no_answer:0, unknown:0 };
