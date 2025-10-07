@@ -7,56 +7,71 @@
     <link rel="icon" href="./favicon.ico" />
     <link rel="stylesheet" href="./styles.css" />
 
-    <!-- Small add-on styles for the mobile dropdown -->
+    <!-- Minimal layout styles for sidebar UI -->
     <style>
-      /* Ensure anything with [hidden] is truly hidden, regardless of other rules */
-      [hidden] { display: none !important; }
-
-      /* Base: hide hamburger on wide screens */
-      .menu-btn { display:none; }
-
-      /* Mobile menu container (hidden by default via [hidden]) */
-      .mobile-menu {
-        position: absolute;
-        right: 12px;
-        top: 56px;          /* just below topbar */
-        background: #ffffff;
-        border: 1px solid #cbd5e1;
-        border-radius: 12px;
-        box-shadow: 0 12px 24px rgba(2,6,23,.12);
-        padding: 8px;
-        display: flex;
-        flex-direction: column;
-        min-width: 180px;
-        z-index: 60;
+      :root{
+        --bg:#f6f7fb; --panel:#ffffff; --ink:#0f172a;
+        --muted:#64748b; --brand:#1e3a8a; --accent:#22c55e; --ring:#e5e7eb;
       }
-      .mobile-menu a {
-        display: block;
-        padding: 10px 12px;
-        border-radius: 8px;
-        text-decoration: none;
-        color: #1d4ed8; /* ink */
-        font-weight: 700;
-      }
-      .mobile-menu a:hover { background: #f1f5f9; }
+      html,body { height:100%; }
+      body { margin:0; background:var(--bg); color:var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
 
-      /* On small screens: hide desktop nav, show hamburger */
-      @media (max-width: 720px) {
-        header .nav { display: none; }
-        .menu-btn {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 8px;
-          padding: 8px 10px;
-          border-radius: 10px;
-          border: 1px solid #cbd5e1;
-          background: #e2e8f0;
-          color: #0f172a;
-          font-weight: 800;
-          cursor: pointer;
-        }
-        .menu-btn:active { transform: translateY(1px); }
+      .app-shell { display:flex; min-height:100vh; }
+
+      /* Sidebar */
+      .sidebar {
+        width: 240px; background: var(--brand); color:#fff; display:flex; flex-direction:column;
+        position:sticky; top:0; height:100vh; padding:16px 14px; gap:12px;
+      }
+      .brand { display:flex; align-items:center; gap:10px; font-weight:900; font-size:20px; letter-spacing:.3px; }
+      .brand-logo { width:36px; height:36px; border-radius:999px; background:#c7d2fe; }
+      .side-nav a{
+        display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px;
+        color:#e5e7eb; text-decoration:none; font-weight:700;
+      }
+      .side-nav a:hover, .side-nav a.active { background:rgba(255,255,255,.12); color:#fff; }
+      .spacer { flex:1; }
+      .logout { color:#e2e8f0; text-decoration:none; font-weight:700; padding:10px 12px; border-radius:10px; }
+      .logout:hover { background:rgba(255,255,255,.12); color:#fff; }
+
+      /* Main */
+      main#app-root{
+        flex:1; padding:20px; max-width:1400px; margin:0 auto; width:100%;
+      }
+      /* Content bars & cards */
+      .content-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+      .title { font-size:28px; font-weight:900; letter-spacing:.2px; }
+      .row { display:flex; gap:10px; align-items:center; }
+      .btn { appearance:none; border:1px solid var(--ring); padding:10px 14px; border-radius:10px; background:#fff; font-weight:800; cursor:pointer; }
+      .btn-primary { background:var(--accent); border-color:var(--accent); color:#062b12; }
+      .btn-ghost { background:#fff; }
+      .grid-3 {
+        display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:14px; margin-bottom:16px;
+      }
+      .stat-card {
+        background:var(--panel); border:1px solid var(--ring); border-radius:14px; padding:16px;
+        display:flex; flex-direction:column; gap:6px; box-shadow:0 2px 6px rgba(0,0,0,.04);
+      }
+      .stat-label { color:var(--muted); font-size:12px; font-weight:800; letter-spacing:.5px; text-transform:uppercase; }
+      .stat-value { font-size:28px; font-weight:900; }
+      .list { display:grid; grid-template-columns:1fr; gap:14px; }
+      .card { background:var(--panel); border:1px solid var(--ring); border-radius:16px; padding:0; overflow:hidden; box-shadow:0 2px 6px rgba(0,0,0,.05); }
+      .card-head { width:100%; display:flex; gap:12px; align-items:center; padding:14px 16px; background:#fff; border-bottom:1px solid var(--ring); cursor:pointer; }
+      .card-head:hover { background:#f9fafb; }
+      .card-title { font-weight:900; }
+      .card-sub { color:var(--muted); font-size:12px; }
+      .card-reminders { color:var(--muted); font-size:12px; }
+      .actions { display:flex; gap:8px; padding:12px 16px; }
+      .icon.danger{ border:none; background:transparent; cursor:pointer; font-size:16px; }
+      .toast{ position:fixed; bottom:16px; right:16px; background:#111827; color:#fff; padding:10px 14px; border-radius:10px; }
+      @media (max-width: 900px){
+        .sidebar{ position:fixed; transform:translateX(0); z-index:50; height:100dvh; }
+        main#app-root{ margin-left:240px; }
+        .grid-3 { grid-template-columns:1fr; }
+      }
+      @media (max-width: 720px){
+        .sidebar{ width:210px; }
+        main#app-root{ margin-left:210px; padding:14px; }
       }
     </style>
 
@@ -65,11 +80,9 @@
 
     <script>
       // ===== DEV ONLY: Inject your ReachPoint-dev credentials =====
-      // NOTE: Use env vars / server proxy for prod builds.
       window.__SUPABASE_URL__ = "https://qmhxpugetaksrktyfmji.supabase.co";
       window.__SUPABASE_ANON_KEY__ = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtaHhwdWdldGFrc3JrdHlmbWppIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg3NjA0NzYsImV4cCI6MjA3NDMzNjQ3Nn0.-pS4lHZKwxiVh3XL191_IMcZ-JvESva3zo2elTfSDGg";
 
-      // Create a single shared Supabase client for the whole app.
       (function initSupabase() {
         try {
           const url = window.__SUPABASE_URL__;
@@ -77,13 +90,9 @@
           if (!url || !key) return;
 
           const client = supabase.createClient(url, key, {
-            auth: {
-              persistSession: true,
-              autoRefreshToken: true
-            },
+            auth: { persistSession: true, autoRefreshToken: true },
             global: { headers: { "x-reachpoint-env": "dev" } },
           });
-
           window.supabase = client;
           window.hasSupabase = () => !!(window.supabase && typeof window.supabase.from === "function");
           console.log("[ReachPoint] Supabase client initialized:", window.hasSupabase());
@@ -95,109 +104,37 @@
   </head>
 
   <body>
-    <header class="topbar" style="position:sticky;top:0;z-index:50;">
-      <div class="brand">ReachPoint</div>
+    <div class="app-shell">
+      <!-- Sidebar -->
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-logo"></div>
+          ReachPoint
+        </div>
 
-      <!-- Hamburger button appears on small screens -->
-      <button class="menu-btn"
-              type="button"
-              aria-label="Open Menu"
-              aria-controls="mobileMenu"
-              aria-expanded="false"
-              aria-haspopup="menu">
-        ☰ Menu
-      </button>
+        <nav class="side-nav">
+          <a href="#/dashboard">Overview</a>
+          <a href="#/create">New Campaign</a>
+          <a href="#/call">Call Anyone</a>
+          <a href="#/insights">Insights</a>
+        </nav>
 
-      <!-- Desktop nav -->
-      <nav class="nav">
-        <a href="#/dashboard">Dashboard</a>
-        <a href="#/create">New Campaign</a>
-        <a href="#/call">Call Anyone</a>
-        <a href="#/insights">Insights</a>
-      </nav>
+        <div class="spacer"></div>
+        <a class="logout" href="#/login" data-logout>Log out</a>
+      </aside>
 
-      <!-- Mobile dropdown menu -->
-      <div id="mobileMenu" class="mobile-menu" role="menu" hidden inert></div>
-    </header>
-
-    <!-- App root -->
-    <main id="app"></main>
+      <!-- Main content -->
+      <main id="app-root">
+        <!-- Your SPA will render into #app via app.js -->
+        <div id="app"></div>
+      </main>
+    </div>
 
     <!-- Default route BEFORE app loads -->
     <script>
       if (!location.hash || !/^#\//.test(location.hash)) {
         location.hash = "#/dashboard";
       }
-
-      // === Mobile menu behavior (robust close-on-toggle & outside) ===
-      (function mobileMenuInit() {
-        const btn  = document.querySelector('.menu-btn');
-        const menu = document.getElementById('mobileMenu');
-        const srcNav = document.querySelector('header .nav');
-        if (!btn || !menu || !srcNav) return;
-
-        function openMenu() {
-          syncMobileMenu();
-          btn.setAttribute('aria-expanded', 'true');
-          menu.hidden = false;
-          menu.removeAttribute('inert');
-        }
-        function closeMenu() {
-          btn.setAttribute('aria-expanded', 'false');
-          menu.hidden = true;
-          menu.setAttribute('inert', '');
-        }
-        function isOpen() {
-          return btn.getAttribute('aria-expanded') === 'true';
-        }
-
-        // Clone the current links from the desktop nav into the mobile menu
-        function syncMobileMenu() {
-          menu.innerHTML = '';
-          srcNav.querySelectorAll('a').forEach(a => {
-            const clone = a.cloneNode(true);
-            clone.setAttribute('role', 'menuitem');
-            menu.appendChild(clone);
-          });
-        }
-
-        // Keep mobile menu in sync when app.js injects/removes nav items (e.g., Logout)
-        const obs = new MutationObserver(() => {
-          if (isOpen()) syncMobileMenu();
-        });
-        obs.observe(srcNav, { childList: true, subtree: true });
-
-        // Toggle open/close from button
-        btn.addEventListener('click', () => (isOpen() ? closeMenu() : openMenu()));
-
-        // Close on link click (route change)
-        menu.addEventListener('click', (e) => {
-          const a = e.target.closest('a[href^="#/"]');
-          if (!a) return;
-          closeMenu();
-        });
-
-        // Close when hash changes (navigated programmatically)
-        window.addEventListener('hashchange', closeMenu);
-
-        // Close if viewport gets large again
-        window.addEventListener('resize', () => {
-          if (window.innerWidth > 720) closeMenu();
-        });
-
-        // Close on Escape
-        document.addEventListener('keydown', (e) => {
-          if (e.key === 'Escape' && isOpen()) closeMenu();
-        });
-
-        // Close on outside tap/click (use pointerdown for mobile reliability)
-        document.addEventListener('pointerdown', (e) => {
-          if (menu.hidden) return;
-          const insideMenu = menu.contains(e.target);
-          const onButton   = btn.contains(e.target);
-          if (!insideMenu && !onButton) closeMenu();
-        });
-      })();
     </script>
 
     <!-- Your app bundle -->

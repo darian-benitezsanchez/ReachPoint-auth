@@ -1,5 +1,5 @@
 // screens/dashboard.js
-// Dashboard with exactly two export buttons per campaign + delete control in header.
+// Sidebar layout: top stat cards + campaign cards
 
 import {
   listCampaigns,
@@ -13,7 +13,7 @@ import {
   exportNotCalledCSV,
   removeProgress,
   persistFullExportRows,
-  loadProgressSnapshotFromSupabase,   // ✅ needed by buildSummaryCSVRows
+  loadProgressSnapshotFromSupabase,
 } from '../data/campaignProgress.js';
 
 import { exportCsvSmart } from '../utils/exportReport.js';
@@ -22,19 +22,41 @@ export function Dashboard(root) {
   root.innerHTML = '';
   const page = el('div');
 
-  // Header: adds "Call Anyone" while keeping "+ New"
-  const header = el('div', 'row space',
-    el('h1', 'title', 'Your Campaigns'),
-    div('row gap-8',
+  // Top content header with quick actions
+  const header = el('div', 'content-head',
+    el('h1', 'title', 'Dashboard'),
+    div('row',
       btn('Call Anyone', 'btn btn-ghost', () => location.hash = '#/call'),
-      btn('+ New', 'btn btn-ghost', () => location.hash = '#/create'),
+      btn('+ New Campaign', 'btn btn-primary', () => location.hash = '#/create'),
     )
   );
   page.appendChild(header);
 
+  // --- Stats row (3 cards) -------------------------------------------------
+  const statsGrid = el('div', 'grid-3');
+  const statCampaigns = stat('Total Campaigns', '—');
+  const statCalls     = stat('Total Calls', '—');
+  const statStudents  = stat('Total Students', '—'); // third stat for top row
+  statsGrid.append(statCampaigns.card, statCalls.card, statStudents.card);
+  page.appendChild(statsGrid);
+
+  // Toast
   const toast = makeToast();
 
   (async () => {
+    // Load counts from Supabase
+    try {
+      const campaignsCount = await countTable('campaigns');
+      const callsCount     = await countTable('call_progress');
+      const studentsCount  = await countTable('students');
+      statCampaigns.set(campaignsCount);
+      statCalls.set(callsCount);
+      statStudents.set(studentsCount);
+    } catch (e) {
+      console.warn('Stat count error:', e);
+    }
+
+    // Load campaigns list as usual
     const campaigns = await listCampaigns();
     const campaignList = Array.isArray(campaigns) ? campaigns : [];
 
@@ -70,7 +92,7 @@ export function Dashboard(root) {
         Array.isArray(c.student_ids) ? c.student_ids.length :
         filtered.length;
 
-      // Small delete icon in header (NOT an action button)
+      // Delete icon
       const del = button('icon danger', async (e) => {
         e?.stopPropagation?.();
         if (!confirm(`Delete campaign "${c.name}"? This also clears its progress.`)) return;
@@ -87,7 +109,6 @@ export function Dashboard(root) {
       const head = button('card-head', () => location.hash = `#/execute/${c.id}`,
         div('card-head-text',
           div('card-title', c.name),
-          // ✅ safe fallbacks (no .length on undefined)
           div('card-sub', `Created ${createdLabel} • ${totalStudents} students`),
           div('card-reminders', remindersLabel(c)),
         ),
@@ -95,12 +116,11 @@ export function Dashboard(root) {
         del
       );
 
-      // Actions: ONLY TWO BUTTONS
       const actions = div('actions',
-        btn('Export Full CSV','btn btn-small', async () => {
+        btn('Export Full CSV','btn', async () => {
           try {
             const { headers, rows } = await buildSummaryCSVRows(c, students);
-            await persistFullExportRows(c.id, rows); // store carbon-copy rows in Supabase
+            await persistFullExportRows(c.id, rows);
             const csv = csvString(headers, rows);
             await exportCsvSmart(`campaign-${c.id}-full.csv`, csv);
             toast.show('Saved full CSV');
@@ -108,7 +128,7 @@ export function Dashboard(root) {
             toast.show('Export failed: ' + (e?.message||e));
           }
         }),
-        btn('Export Not Called','btn btn-small', async () => {
+        btn('Export Not Called','btn', async () => {
           try {
             const csv = await exportNotCalledCSV(c.id, queueIds, idToStudent);
             await exportCsvSmart(`campaign-${c.id}-not-called.csv`, csv);
@@ -123,13 +143,38 @@ export function Dashboard(root) {
       list.appendChild(card);
     }
 
+    // Section title for campaigns
+    page.appendChild(el('h2','title', 'Your Campaigns'));
     page.appendChild(list);
+
     root.appendChild(page);
     root.appendChild(toast.node);
   })();
 }
 
-/* ---------- helpers ---------- */
+/* ---------- Supabase helpers ---------- */
+
+async function countTable(table) {
+  const { count, error } = await window.supabase
+    .from(table)
+    .select('*', { count: 'exact', head: true });
+  if (error) throw error;
+  return count || 0;
+}
+
+/* ---------- UI helpers ---------- */
+
+function stat(label, initialValue='—'){
+  const valueEl = el('div','stat-value', String(initialValue));
+  const card = el('section','stat-card',
+    el('div','stat-label', label),
+    valueEl
+  );
+  return {
+    card,
+    set(v){ valueEl.textContent = String(v ?? '—'); }
+  };
+}
 
 function remindersLabel(c) {
   if (!c?.reminders?.length) return 'Reminders: —';
@@ -148,32 +193,26 @@ async function buildSummaryCSVRows(campaign, allStudents) {
   const idToStudent = {};
   filtered.forEach((s,i)=>{ idToStudent[getStudentId(s,i)] = s; });
 
-  // Pull from progress store for outcomes/responses/timestamps/notes
   const snap = await loadProgressSnapshotFromSupabase(campaign.id);
   const contacts = snap?.contacts || {};
 
-  // CSV headers aligned to Supabase-normalized student columns
   const headers = [
     'full_name','camper_email','camper_high_school_middle_school','high_school_graduation_year','birthdate','mobile_phone','gpa',
     'mailing_street_address','mailing_city','mailing_state_province','mailing_zip_postal_code','camper_status',
     'parent_guardian_name','parent_guardian_relation','parent_guardian_number','parent_guardian_email',
     'emergency_contact_name','emergency_contact_type','emergency_contact_number','preferred_language','major','college','jr_snr_wknd',
-    // progress fields appended:
     'outcome','response','notes','timestamp','student_id','campaign_id','campaign_name',
   ];
 
   const rows = [];
-
   filtered.forEach((student, idx) => {
     const sid = getStudentId(student, idx);
     const st = idToStudent[sid];
-
     const norm = (k, ...alts) => {
       if (st && st[k] != null && st[k] !== '') return st[k];
       for (const a of alts) if (st && st[a] != null && st[a] !== '') return st[a];
       return '';
     };
-
     const fullName =
       norm('full_name','fullName','Full Name*','Full Name','name') ||
       `${(st?.first_name||'').trim()} ${(st?.last_name||'').trim()}`.trim();
@@ -228,6 +267,7 @@ async function buildSummaryCSVRows(campaign, allStudents) {
   return { headers, rows };
 }
 
+/* ---------- small DOM helpers ---------- */
 function el(tag, className, ...children) {
   const n = document.createElement(tag);
   if (typeof className === 'string') { n.className = className; }
