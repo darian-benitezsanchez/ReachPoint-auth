@@ -290,13 +290,21 @@ export async function Execute(root, campaignInput) {
         .limit(100);
       if (cpErr) throw cpErr;
 
-      // Campaign names for those campaign_ids
-      const campaignIds = [...new Set((cpRows || []).map(r => r.campaign_id).filter(Boolean))];
-      const { data: campRows, error: campErr } = campaignIds.length
-        ? await window.supabase.from('campaigns').select('id,name').in('id', campaignIds)
-        : { data: [], error: null };
-      if (campErr) throw campErr;
-      const campNameById = new Map((campRows || []).map(r => [r.id, r.name]));
+      // Campaign names for those campaign_ids (filter to UUIDs only)
+      const rawCampaignIds = [...new Set((cpRows || []).map(r => r.campaign_id).filter(Boolean))];
+      const uuidCampaignIds = rawCampaignIds.filter(isUuid);
+
+      let campNameById = new Map();
+      if (uuidCampaignIds.length) {
+        const { data: campRows, error: campErr } = await window.supabase
+          .from('campaigns')
+          .select('id,name')
+          .in('id', uuidCampaignIds);
+        if (campErr) throw campErr;
+        campNameById = new Map((campRows || []).map(r => [r.id, r.name]));
+      }
+      // Non-UUID ids won’t be found; we’ll fall back to showing the id itself.
+
 
       // Survey answers (by contact_id + campaign_id)
       const { data: srRows, error: srErr } = campaignIds.length
@@ -493,6 +501,12 @@ export async function Execute(root, campaignInput) {
           actions
         );
 
+        function isUuid(v) {
+          return typeof v === 'string' &&
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+        }
+
+        
         // Load interactions async (don’t block UI)
         loadAndRenderInteractions(interactionsMount, currentId).catch(()=>{ /* no-op */ }); // ⬅️ NEW
 
