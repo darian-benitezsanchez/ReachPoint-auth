@@ -23,14 +23,23 @@ export function Dashboard(root) {
   const page = el('div');
 
   // Top content header with quick actions
+  // Top content header with quick actions
+  const actionsRow = div('row',
+    btn('Call Anyone', 'btn btn-ghost', () => location.hash = '#/call'),
+    btn('+ New Campaign', 'btn btn-primary', () => location.hash = '#/create'),
+  );
+
+  // push the buttons row to the right
+  actionsRow.style.marginLeft = 'auto';
+  // keep them right-aligned even when the row wraps under the title
+  actionsRow.style.justifyContent = 'flex-end';
+
   const header = el('div', 'content-head',
     el('h1', 'title', 'Dashboard'),
-    div('row',
-      btn('Call Anyone', 'btn btn-ghost', () => location.hash = '#/call'),
-      btn('+ New Campaign', 'btn btn-primary', () => location.hash = '#/create'),
-    )
+    actionsRow
   );
   page.appendChild(header);
+
 
   // --- Stats row (3 cards) -------------------------------------------------
   const statsGrid = el('div', 'grid-3');

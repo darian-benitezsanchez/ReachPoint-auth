@@ -352,3 +352,17 @@ body {
   .auth-card { padding:22px; border-radius:14px; margin-top: 6vh; }
   .row.gap { grid-template-columns: 1fr; }
 }
+
+.content-head{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap; /* so the buttons can drop to the next line on small screens */
+}
+.content-head .row{
+  display:flex;
+  gap:8px;
+}
+@media (max-width: 640px){
+  .content-head .row{ width:100%; } /* lets the row span full width when it wraps */
+}
