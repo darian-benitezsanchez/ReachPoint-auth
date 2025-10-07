@@ -1,11 +1,10 @@
 // screens/insights.js
 /* ------------------------------------------------------------------ */
-/* ReachPoint Insights — Supabase-backed                              */
-/* Uses: campaigns, v_call_progress_latest (or call_progress),        */
-/*       survey_responses, students                                   */
+/* ReachPoint Insights — Direct Supabase queries (your table names)    */
+/* Uses: campaigns, v_call_progress_latest, survey_responses, students */
 /* ------------------------------------------------------------------ */
 
-// ======= Chart.js lazy loader ======================================
+/* ===== Chart.js loader ===== */
 async function ensureChart() {
   if (window.Chart) return;
   await new Promise((resolve, reject) => {
@@ -18,15 +17,13 @@ async function ensureChart() {
   });
 }
 
-// ======= tiny DOM helpers ==========================================
+/* ===== DOM helpers ===== */
 function div(cls, style = {}) { const n=document.createElement('div'); if (cls) n.className=cls; Object.assign(n.style, style); return n; }
 function h2(text) { const n=document.createElement('div'); n.textContent=text; n.style.cssText='font-size:18px;font-weight:800;margin:12px 0 8px'; return n; }
 function chartCanvas(id) {
   const wrap = div('', { width:'100%', maxWidth:'980px', margin:'8px auto' });
   const c = document.createElement('canvas');
-  c.id = id;
-  c.style.width = '100%';
-  c.style.maxHeight = '360px';
+  c.id = id; c.style.width = '100%'; c.style.maxHeight = '360px';
   wrap.appendChild(c);
   return { wrap, canvas: c };
 }
@@ -40,210 +37,123 @@ function destroyChartOnCanvasId(canvasId){
 }
 function ctxFor(id){ destroyChartOnCanvasId(id); const el=document.getElementById(id); return el?el.getContext('2d'):null; }
 
-// ======= small utils ===============================================
-function toDateSafe(ts){
-  if (ts==null) return null;
-  let n = ts;
-  if (typeof ts === 'string'){
-    const num = Number(ts);
-    if (Number.isFinite(num)) n = num;
-  }
-  const d = new Date(n);
-  if (Number.isFinite(d.getTime())) return d;
-  try {
-    const d2 = new Date(String(ts));
-    return Number.isFinite(d2.getTime()) ? d2 : null;
-  } catch { return null; }
-}
-function pickName(stu){
-  if (!stu) return '';
-  const a = String(stu.first_name || stu.firstName || '').trim();
-  const b = String(stu.last_name  || stu.lastName  || '').trim();
-  const fallback = stu.full_name || stu.fullName || stu['Full Name*'] || '';
-  return (a || b) ? `${a} ${b}`.trim() : String(fallback || '').trim();
-}
-function getGradYear(stu){
-  const keys = [
-    'High School Graduation Year*','High School Graduation Year','Graduation Year',
-    'HS Grad Year','Grad Year','grad_year','graduation_year'
-  ];
-  for (const k of keys){ const v = stu?.[k]; if (v != null && String(v).trim() !== '') return String(v).trim(); }
-  return 'Unknown';
-}
+/* ===== utils ===== */
+const val = (o,k,alts=[]) => {
+  if (o && k in o && o[k] != null) return o[k];
+  for (const a of alts) if (o && a in o && o[a] != null) return o[a];
+  return undefined;
+};
+const str = x => (x == null ? '' : String(x));
+function toDateSafe(ts){ if (!ts) return null; const d = new Date(ts); return isNaN(d.getTime()) ? null : d; }
 function uniq(arr){ return Array.from(new Set(arr)); }
 
-// ======= Supabase data access ======================================
+/* ===== direct Supabase data ===== */
 async function sbListCampaigns(){
-  const { data, error } = await window.supabase
-    .from('campaigns')
-    .select('id,name,created_at')       // no "active" column
-    .order('created_at', { ascending:false });
+  const { data, error } = await window.supabase.from('campaigns').select('*').order('created_at', { ascending:false });
   if (error) throw error;
-  return data || [];
+  return (data || []).map(r => ({
+    id: str(val(r,'id',['campaign_id'])),
+    name: str(val(r,'name',['title'])),
+    created_at: val(r,'created_at',['createdAt','created'])
+  })).filter(c => c.id);
 }
 
-/**
- * Preferred source: v_call_progress_latest
- * Fallback: call_progress (pick latest row per student per campaign)
- */
 async function sbLoadProgressLatest(campaignId){
-  const cid = String(campaignId);
-
-  // try the view
-  let viewErr = null;
-  try {
-    const { data, error } = await window.supabase
-      .from('v_call_progress_latest')
-      .select('*')
-      .eq('campaign_id', cid);
-    if (error) throw error;
-    if (Array.isArray(data)) return { rows: data, from: 'view' };
-  } catch(e){ viewErr = e; }
-
-  // fallback: call_progress
+  // v_call_progress_latest exists in your project
   const { data, error } = await window.supabase
-    .from('call_progress')
+    .from('v_call_progress_latest')
     .select('*')
-    .eq('campaign_id', cid);
+    .eq('campaign_id', String(campaignId));
   if (error) throw error;
-
-  const byStudent = new Map();
-  for (const r of (data || [])){
-    const sid = String(r.student_id ?? r.contact_id ?? r.studentId ?? r.contactId ?? '');
-    if (!sid) continue;
-    const at = Number(r.last_called_at ?? r.updated_at ?? r.created_at ?? 0) ||
-               (toDateSafe(r.last_called_at || r.updated_at || r.created_at)?.getTime() || 0);
-    const prev = byStudent.get(sid);
-    if (!prev || at >= prev.__ts){ byStudent.set(sid, { ...r, __ts: at }); }
-  }
-  return { rows: Array.from(byStudent.values()), from: 'table', viewErr };
+  return (data || []).map(r => ({
+    campaign_id: str(val(r,'campaign_id',['campaignId'])),
+    contact_id:  str(val(r,'contact_id',['student_id','studentId','contactId'])),
+    outcome:     val(r,'outcome',['status']),
+    survey_answer: val(r,'survey_answer',['answer']),
+    last_called_at: val(r,'last_called_at',['updated_at','created_at','at'])
+  })).filter(r => r.contact_id);
 }
 
-/** Latest survey answers (if not already present in progress rows)
- * Tries contact_id first (common), then falls back to student_id.
- */
-async function sbLatestSurveyAnswers(campaignId, studentIds){
-  if (!studentIds.length) return new Map();
-  const cid = String(campaignId);
-  const ids = uniq(studentIds).filter(Boolean);
+async function sbLatestSurveyAnswers(campaignId, contactIds){
+  const ids = uniq(contactIds).filter(Boolean);
+  if (!ids.length) return new Map();
   const out = new Map();
   const CHUNK = 500;
-
-  // helper to run one shape
-  const fetchChunk = async (slice, idCol) => {
-    const { data, error } = await window.supabase
-      .from('survey_responses')
-      .select(`${idCol},answer,created_at`)
-      .eq('campaign_id', cid)
-      .in(idCol, slice);
-    if (error) throw error;
-    for (const r of (data || [])){
-      const sid = String(r[idCol] ?? '');
-      if (!sid) continue;
-      const ts = toDateSafe(r.created_at)?.getTime() || 0;
-      const prev = out.get(sid);
-      if (!prev || ts > prev.ts){ out.set(sid, { answer: r.answer, ts }); }
-    }
-  };
-
   for (let i=0;i<ids.length;i+=CHUNK){
     const slice = ids.slice(i, i+CHUNK);
-
-    // try contact_id first
-    try {
-      await fetchChunk(slice, 'contact_id');
-      continue; // success with contact_id
-    } catch (e1) {
-      // if it's a missing column error, try student_id
-      if (e1?.code === '42703') {
-        try {
-          await fetchChunk(slice, 'student_id'); // some schemas use student_id
-          continue;
-        } catch (e2) {
-          // surface the second error if it's not also a 42703
-          if (e2?.code !== '42703') throw e2;
-          // both columns missing — nothing we can do
-        }
-      } else {
-        throw e1; // a real error (RLS, etc.)
-      }
+    const { data, error } = await window.supabase
+      .from('survey_responses')
+      .select('*')
+      .eq('campaign_id', String(campaignId))
+      .in('contact_id', slice);            // your table uses contact_id (not student_id)
+    if (error) throw error;
+    for (const r of (data || [])){
+      const sid = str(val(r,'contact_id',['student_id']));
+      const ans = val(r,'answer',['survey_answer']);
+      const ts  = toDateSafe(val(r,'created_at',['at']))?.getTime() || 0;
+      const prev = out.get(sid);
+      if (!prev || ts > prev.ts) out.set(sid, { answer: ans, ts });
     }
   }
   return out;
 }
 
-/** Fetch students in bulk to enrich */
-async function sbFetchStudentsByIds(studentIds){
-  const ids = uniq(studentIds).filter(Boolean);
+async function sbFetchStudentsByIds(contactIds){
+  const ids = uniq(contactIds).filter(Boolean);
   if (!ids.length) return {};
   const out = {};
   const CHUNK = 1000;
   for (let i=0;i<ids.length;i+=CHUNK){
     const slice = ids.slice(i, i+CHUNK);
-    // try 'id'
-    const { data, error } = await window.supabase
-      .from('students')
-      .select('*')
-      .in('id', slice);
-    if (!error && Array.isArray(data) && data.length){
-      for (const s of data) out[String(s.id)] = s;
-      continue;
+    // Try match on id first
+    let { data, error } = await window.supabase.from('students').select('*').in('id', slice);
+    if (error) data = [];
+    if (!Array.isArray(data) || data.length === 0) {
+      // Fallback to student_id
+      const alt = await window.supabase.from('students').select('*').in('student_id', slice);
+      if (!alt.error && Array.isArray(alt.data)) data = alt.data;
     }
-    // fallback 'student_id'
-    const alt = await window.supabase
-      .from('students')
-      .select('*')
-      .in('student_id', slice);
-    if (alt.error) throw alt.error;
-    for (const s of (alt.data || [])) out[String(s.student_id)] = s;
+    for (const s of (data || [])){
+      const id = str(val(s,'id',['student_id']));
+      const full = str(val(s,'full_name',['fullName','Full Name*','first_name'])) || (str(s.first_name||'')+' '+str(s.last_name||'')).trim();
+      const gy = str(val(s,'High School Graduation Year*',[
+        'High School Graduation Year','Graduation Year','HS Grad Year','Grad Year','grad_year','graduation_year'
+      ])) || 'Unknown';
+      out[id] = { id, full_name: full, grad_year: gy };
+    }
   }
   return out;
 }
 
-// ======= Transform rows to chartable rows ===========================
-function normalizeProgressRows(progressRows, latestSurveyMap, campaign){
-  const rows = [];
+/* ===== normalization (rows → chart rows) ===== */
+function normalizeRows(progressRows, latestSurveyMap, campaign){
+  const out = [];
   for (const r of (progressRows || [])){
-    const sid = String(r.student_id ?? r.contact_id ?? r.studentId ?? r.contactId ?? '');
+    const sid = str(r.contact_id);
     if (!sid) continue;
-
-    const outcome = (r.outcome ?? r.status ?? null);
-    const survey_answer = (r.survey_answer ?? r.answer ?? latestSurveyMap.get(sid)?.answer ?? null);
-    const response = survey_answer ?? outcome ?? null;
-
-    const tsRaw = r.last_called_at ?? r.updated_at ?? r.created_at ?? r.at ?? null;
-    const ts = toDateSafe(tsRaw)?.toISOString() || '';
-
-    rows.push({
-      studentId: sid,
-      response,
-      timestamp: ts,
-      campaignId: String(campaign.id),
-      campaignName: campaign.name || ''
-    });
+    const response = (r.survey_answer ?? latestSurveyMap.get(sid)?.answer ?? r.outcome ?? null);
+    const ts = toDateSafe(r.last_called_at)?.toISOString() || '';
+    out.push({ studentId: sid, response, timestamp: ts, campaignId: campaign.id, campaignName: campaign.name || '' });
   }
-  return rows;
+  return out;
 }
 
-// ======= Charts =====================================================
+/* ===== charts ===== */
 function overallResponseBar(ctx, counts) {
   const labels = Object.keys(counts);
   const data = labels.map(k => counts[k]);
   return new Chart(ctx, {
     type: 'bar',
     data: { labels, datasets: [{ label: 'Count', data }] },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
-    }
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
   });
 }
 function answeredByGradYearPie(ctx, rows, idToStudent) {
   const answered = rows.filter(r => String(r.response).toLowerCase() === 'answered');
   const bucket = {};
   for (const r of answered) {
-    const gy = getGradYear(idToStudent[r.studentId]);
+    const gy = (idToStudent[r.studentId]?.grad_year) || 'Unknown';
     bucket[gy] = (bucket[gy] || 0) + 1;
   }
   const labels = Object.keys(bucket);
@@ -282,7 +192,7 @@ function responsesByDOWLine(ctx, rows) {
   });
 }
 
-// ======= Empty state helpers =======================================
+/* ===== empty-state helpers ===== */
 function showEmpty(text) {
   const host = document.querySelector('[data-insights-empty]');
   if (!host) return;
@@ -293,7 +203,7 @@ function showEmpty(text) {
 }
 function clearEmpty(){ const host=document.querySelector('[data-insights-empty]'); if (host) host.textContent=''; }
 
-// ======= Main screen ===============================================
+/* ===== main ===== */
 export async function Insights(root) {
   await ensureChart();
 
@@ -301,12 +211,10 @@ export async function Insights(root) {
   root.innerHTML = '';
   const page = div('', { padding:'16px' });
   const header = div('', { display:'flex', justifyContent:'space-between', alignItems:'center', maxWidth:'980px', margin:'0 auto 8px' });
-  const title = document.createElement('div');
-  title.textContent = 'Insights';
-  title.style.fontWeight = '800'; title.style.fontSize = '22px';
+  const title = document.createElement('div'); title.textContent='Insights'; title.style.fontWeight='800'; title.style.fontSize='22px';
 
   const selectWrap = div('', { display:'flex', gap:'8px', alignItems:'center' });
-  const label = document.createElement('label'); label.textContent = 'Campaign:'; label.style.fontWeight='600';
+  const label = document.createElement('label'); label.textContent='Campaign:'; label.style.fontWeight='600';
   const picker = document.createElement('select');
   picker.style.cssText='padding:6px 10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;';
   selectWrap.append(label, picker);
@@ -315,24 +223,19 @@ export async function Insights(root) {
   const sectionWrap = div('', { maxWidth:'980px', margin:'0 auto' });
   sectionWrap.setAttribute('data-insights-section','1');
 
-  const empty = document.createElement('div');
-  empty.setAttribute('data-insights-empty','1');
+  const empty = document.createElement('div'); empty.setAttribute('data-insights-empty','1');
   sectionWrap.append(empty);
 
   const desc = div('', { marginTop:'8px' });
   desc.append(h2('Descriptive Statistics'));
 
   const overallBlock = div('', { marginTop:'6px' });
-  const overallTitle = document.createElement('div');
-  overallTitle.textContent = 'Overall Response / Outcome Breakdown';
-  overallTitle.style.cssText='font-weight:700;margin:8px 0';
+  const overallTitle = document.createElement('div'); overallTitle.textContent='Overall Response / Outcome Breakdown'; overallTitle.style.cssText='font-weight:700;margin:8px 0';
   const overallCan = chartCanvas('overallResponsesChart');
   overallBlock.append(overallTitle, overallCan.wrap);
 
   const gyBlock = div('', { marginTop:'6px' });
-  const gyTitle = document.createElement('div');
-  gyTitle.textContent = 'Answered Distribution by High School Graduation Year*';
-  gyTitle.style.cssText='font-weight:700;margin:8px 0';
+  const gyTitle = document.createElement('div'); gyTitle.textContent='Answered Distribution by High School Graduation Year*'; gyTitle.style.cssText='font-weight:700;margin:8px 0';
   const gyCan = chartCanvas('responsesByGradYearChart');
   gyBlock.append(gyTitle, gyCan.wrap);
 
@@ -342,16 +245,12 @@ export async function Insights(root) {
   calls.append(h2('Call Statistics'));
 
   const todBlock = div('', { marginTop:'6px' });
-  const todTitle = document.createElement('div');
-  todTitle.textContent = 'Responses by Hour of Day';
-  todTitle.style.cssText='font-weight:700;margin:8px 0';
+  const todTitle = document.createElement('div'); todTitle.textContent='Responses by Hour of Day'; todTitle.style.cssText='font-weight:700;margin:8px 0';
   const todCan = chartCanvas('responsesByHourChart');
   todBlock.append(todTitle, todCan.wrap);
 
   const dowBlock = div('', { marginTop:'6px' });
-  const dowTitle = document.createElement('div');
-  dowTitle.textContent = 'Responses by Day of Week';
-  dowTitle.style.cssText='font-weight:700;margin:8px 0';
+  const dowTitle = document.createElement('div'); dowTitle.textContent='Responses by Day of Week'; dowTitle.style.cssText='font-weight:700;margin:8px 0';
   const dowCan = chartCanvas('responsesByDOWChart');
   dowBlock.append(dowTitle, dowCan.wrap);
 
@@ -364,22 +263,20 @@ export async function Insights(root) {
   // Track chart instances for cleanup
   let charts = { overall:null, gy:null, hour:null, dow:null };
 
-  // Load campaigns
+  // Load campaigns from your "campaigns" table (select * then normalize)
   let campaigns = [];
   try { campaigns = await sbListCampaigns(); }
   catch(e){ console.error('[Insights] failed to load campaigns', e); showEmpty('Could not load campaigns.'); return; }
 
-  // Populate picker (no active filtering)
+  // Populate picker
   picker.innerHTML = '';
-  const active = campaigns; // no filtering
-  if (!active.length){
-    const opt = document.createElement('option');
-    opt.value = ''; opt.textContent = 'No campaigns';
+  if (!campaigns.length){
+    const opt = document.createElement('option'); opt.value=''; opt.textContent='No campaigns';
     picker.appendChild(opt); picker.disabled = true;
     showEmpty('Create a campaign to see insights.');
     return;
   } else {
-    for (const c of active){
+    for (const c of campaigns){
       const opt = document.createElement('option');
       opt.value = String(c.id);
       opt.textContent = c.name || `Campaign ${c.id}`;
@@ -387,43 +284,39 @@ export async function Insights(root) {
     }
   }
 
-  async function renderForCampaign(campaignIdRaw){
+  async function renderForCampaign(campaignId){
     clearEmpty();
-    const campaignId = String(campaignIdRaw || '');
-    if (!campaignId) return;
+    const campaign = campaigns.find(c => String(c.id) === String(campaignId)) || { id: campaignId, name: '' };
 
-    const campaign = active.find(c => String(c.id) === campaignId) || { id: campaignId, name: '' };
-
-    // Load latest progress (view -> fallback)
-    let latest;
-    try { latest = await sbLoadProgressLatest(campaignId); }
+    // Load latest progress rows from your view
+    let rows = [];
+    try { rows = await sbLoadProgressLatest(campaign.id); }
     catch(e){ console.error('[Insights] progress load failed', e); showEmpty('Could not load progress.'); return; }
 
-    const progressRows = latest.rows || [];
-    if (!progressRows.length){
-      showEmpty('No call data yet — once you record outcomes, stats will appear here.');
-      // Draw zeroed chart for clarity
+    if (!rows.length){
+      showEmpty('No call data yet — once outcomes/responses are recorded, stats will appear here.');
       destroyChart(charts.overall); destroyChart(charts.gy); destroyChart(charts.hour); destroyChart(charts.dow);
       destroyChartOnCanvasId('overallResponsesChart'); destroyChartOnCanvasId('responsesByGradYearChart'); destroyChartOnCanvasId('responsesByHourChart'); destroyChartOnCanvasId('responsesByDOWChart');
-      const zCounts = { answered:0, no_answer:0, unknown:0 };
-      const overallCtx = ctxFor('overallResponsesChart'); if (overallCtx) charts.overall = overallResponseBar(overallCtx, zCounts);
+      const zCtx = ctxFor('overallResponsesChart'); if (zCtx) charts.overall = overallResponseBar(zCtx, { answered:0, no_answer:0, unknown:0 });
       return;
     }
 
-    // Supplement with latest survey answers when not present in rows
-    const studentIds = progressRows.map(r => String(r.student_id ?? r.contact_id ?? r.studentId ?? r.contactId ?? '')).filter(Boolean);
+    const contactIds = rows.map(r => r.contact_id).filter(Boolean);
+
+    // If survey_answer missing, pull latest from survey_responses (uses contact_id)
     let latestSurvey = new Map();
-    try {
-      const hasSurveyField = progressRows.some(r => r.survey_answer != null || r.answer != null);
-      if (!hasSurveyField) latestSurvey = await sbLatestSurveyAnswers(campaignId, studentIds);
-    } catch(e){ console.warn('[Insights] survey fallback failed', e); }
+    const hasSurvey = rows.some(r => r.survey_answer != null);
+    if (!hasSurvey) {
+      try { latestSurvey = await sbLatestSurveyAnswers(campaign.id, contactIds); }
+      catch(e){ console.warn('[Insights] survey fallback failed', e); }
+    }
 
-    // Build normalized rows
-    const normRows = normalizeProgressRows(progressRows, latestSurvey, campaign);
+    // Normalize
+    const normRows = normalizeRows(rows, latestSurvey, campaign);
 
-    // Fetch students for enrichment (grad year)
+    // Fetch students (grad year, etc.)
     let idToStudent = {};
-    try { idToStudent = await sbFetchStudentsByIds(studentIds); }
+    try { idToStudent = await sbFetchStudentsByIds(contactIds); }
     catch(e){ console.warn('[Insights] students fetch failed', e); }
 
     if (!normRows.length){
@@ -431,14 +324,14 @@ export async function Insights(root) {
       return;
     }
 
-    // Tally outcomes
+    // Counts
     const counts = {};
     for (const r of normRows){
       const key = String(r.response ?? 'unknown').trim().toLowerCase() || 'unknown';
       counts[key] = (counts[key] || 0) + 1;
     }
 
-    // Rebuild charts
+    // Rebuild charts cleanly
     destroyChart(charts.overall); destroyChart(charts.gy); destroyChart(charts.hour); destroyChart(charts.dow);
     destroyChartOnCanvasId('overallResponsesChart'); destroyChartOnCanvasId('responsesByGradYearChart'); destroyChartOnCanvasId('responsesByHourChart'); destroyChartOnCanvasId('responsesByDOWChart');
 
@@ -453,13 +346,9 @@ export async function Insights(root) {
     if (dowCtx)     charts.dow     = responsesByDOWLine(dowCtx, normRows);
   }
 
-  // Initial render
-  await renderForCampaign(picker.value || String(active[0].id));
-
-  // Change handler
-  picker.addEventListener('change', async () => {
-    await renderForCampaign(picker.value);
-  });
+  // Initial + change handler
+  await renderForCampaign(picker.value || String(campaigns[0].id));
+  picker.addEventListener('change', async () => { await renderForCampaign(picker.value); });
 
   // Cleanup on route change
   function cleanup(){
