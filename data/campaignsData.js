@@ -183,46 +183,75 @@ export async function getCampaignById(id) {
 
 export async function saveCampaign(campaign) {
   const s = supa();
-  if (s) {
-    // Upsert using snake_case columns in DB
-    const up = {
-      id: campaign.id,
-      name: campaign.name,
-      filters: campaign.filters || [],
-      student_ids: campaign.studentIds || campaign.student_ids || [],
-      reminders: campaign.reminders || [],
-      survey: campaign.survey || null
+
+  // Map incoming object to DB column names (snake_case) and strip unknowns
+  const toDb = (c) => {
+    const payload = {
+      name: c.name,
+      // only include if these columns exist in your table:
+      filters: c.filters ?? [],
+      student_ids: c.studentIds ?? c.student_ids ?? [],
+      survey: c.survey ?? null,
+      // reminders: c.reminders ?? [],   // ← include ONLY if campaigns.reminders exists
+      // created_at: new Date().toISOString(), // usually let DB default handle this
     };
-    const { error } = await s.from("campaigns").upsert(up, { onConflict: 'id' });
-    if (error) throw error;
-
-    // refresh local cache with normalized rows
-    await listCampaigns();
-    return campaign;
-  }
-
-  // ----- Local fallback -----
-  const arr = JSON.parse(localStorage.getItem(K.CAMPAIGNS) || "[]");
-
-  const next = {
-    id: campaign.id,
-    name: campaign.name,
-    createdAt: campaign.createdAt ?? Date.now(),
-    updatedAt: campaign.updatedAt ?? Date.now(),
-    filters: campaign.filters || [],
-    studentIds: campaign.studentIds || campaign.student_ids || [],
-    reminders: campaign.reminders || [],
-    survey: campaign.survey || null,
-
-    // keep snake_case mirror for older code paths
-    student_ids: campaign.studentIds || campaign.student_ids || []
+    return payload;
   };
 
-  const i = arr.findIndex(c => c.id === campaign.id);
+  if (s) {
+    if (!campaign.id) {
+      // --- CREATE: no id provided → let DB generate UUID ---
+      const { data, error } = await s
+        .from('campaigns')
+        .insert(toDb(campaign))          // no id, no onConflict
+        .select('*')
+        .single();
+
+      if (error) throw error;
+
+      // refresh cache with normalized rows
+      await listCampaigns();
+      return normalizeRowFromDB(data);
+    } else {
+      // --- UPDATE: existing id ---
+      const { data, error } = await s
+        .from('campaigns')
+        .update(toDb(campaign))
+        .eq('id', campaign.id)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+
+      await listCampaigns();
+      return normalizeRowFromDB(data);
+    }
+  }
+
+  // ---------- Local fallback (no Supabase) ----------
+  const arr = JSON.parse(localStorage.getItem(K.CAMPAIGNS) || '[]');
+
+  // If no id (create), synthesize a local id so the app can keep working offline
+  const localId = campaign.id ?? `local_${Date.now()}`;
+
+  const next = {
+    id: localId,
+    name: campaign.name,
+    createdAt: campaign.createdAt ?? Date.now(),
+    updatedAt: Date.now(),
+    filters: campaign.filters ?? [],
+    studentIds: campaign.studentIds ?? campaign.student_ids ?? [],
+    survey: campaign.survey ?? null,
+    // reminders: campaign.reminders ?? [], // keep only if you actually use it locally
+    student_ids: campaign.studentIds ?? campaign.student_ids ?? [],
+  };
+
+  const i = arr.findIndex((c) => c.id === localId);
   if (i >= 0) arr[i] = next; else arr.push(next);
   localStorage.setItem(K.CAMPAIGNS, JSON.stringify(arr));
-  return campaign;
+  return next;
 }
+
 
 export async function deleteCampaign(id) {
   const s = supa();

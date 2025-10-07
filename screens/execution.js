@@ -363,8 +363,7 @@ export async function Execute(root, campaignInput) {
           cell.textContent = text ?? '—';
           return cell;
         };
-        const displayName = campNameById.get(r.campaign_id);
-        td(displayName || 'Unknown campaign');
+        td(campNameById.get(r.campaign_id) || r.campaign_id);
         td(String(r.attempts ?? '—'));
         td(r.outcome || '—');
         td(answerByCamp.get(r.campaign_id) || '—');

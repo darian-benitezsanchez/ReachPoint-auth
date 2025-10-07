@@ -114,25 +114,37 @@ export function CreateCampaign(root) {
         wrap(selectedDates.sort().map(d => pill(d))),
         btn('Save Campaign', 'btn btn-primary', async () => {
           if (!selectedDates.length) return;
+
           const matched = applyFilters(students, filters);
           const studentIds = matched.map((s, i) => getStudentId(s, i));
           const reminders = studentIds.map(id => ({ contactId: id, dates: selectedDates.slice().sort() }));
 
-          const now = Date.now();
+          // Build payload using DB column names (snake_case) and let the DB assign the UUID id.
+          const nowIso = new Date().toISOString();
+
           const payload = {
-            id: String(now),
             name: name.trim() || `Campaign ${new Date().toLocaleDateString()}`,
-            createdAt: now,
-            filters,
-            studentIds,
-            reminders
+            // If your table uses snake_case:
+            // created_at: nowIso,                  // only include if your schema expects it and doesn’t have a DEFAULT
+            student_ids: studentIds,                // 👈 use snake_case if your DB column is student_ids
+            filters,                                // ok if campaigns.filters is jsonb
+            reminders                               // only keep if campaigns.reminders exists (jsonb). Otherwise remove.
           };
+
           if (collectResponses) {
-            payload.survey = { question: questionText.trim(), options: options.slice(), createdAt: now, updatedAt: now, active: true };
+            payload.survey = {
+              question: questionText.trim(),
+              options: options.slice(),
+              created_at: nowIso,                   // or createdAt if your column is camelCase json inside survey
+              updated_at: nowIso,
+              active: true
+            };
           }
+
           await saveCampaign(payload);
           location.hash = '#/dashboard';
         }),
+
         btn('Back', 'btn btn-ghost', () => { step = 'question'; render(); })
       );
     }
