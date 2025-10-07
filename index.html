@@ -9,6 +9,9 @@
 
     <!-- Small add-on styles for the mobile dropdown -->
     <style>
+      /* Ensure anything with [hidden] is truly hidden, regardless of other rules */
+      [hidden] { display: none !important; }
+
       /* Base: hide hamburger on wide screens */
       .menu-btn { display:none; }
 
@@ -100,11 +103,12 @@
               type="button"
               aria-label="Open Menu"
               aria-controls="mobileMenu"
-              aria-expanded="false">
+              aria-expanded="false"
+              aria-haspopup="menu">
         ☰ Menu
       </button>
 
-      <!-- Desktop nav (unchanged; app.js manages auth visibility + logout here) -->
+      <!-- Desktop nav -->
       <nav class="nav">
         <a href="#/dashboard">Dashboard</a>
         <a href="#/create">New Campaign</a>
@@ -112,8 +116,8 @@
         <a href="#/insights">Insights</a>
       </nav>
 
-      <!-- Mobile dropdown menu (links cloned from desktop nav at open time) -->
-      <div id="mobileMenu" class="mobile-menu" hidden></div>
+      <!-- Mobile dropdown menu -->
+      <div id="mobileMenu" class="mobile-menu" role="menu" hidden inert></div>
     </header>
 
     <!-- App root -->
@@ -125,72 +129,73 @@
         location.hash = "#/dashboard";
       }
 
-      // === Mobile menu behavior ===
+      // === Mobile menu behavior (robust close-on-toggle & outside) ===
       (function mobileMenuInit() {
-        const btn = document.querySelector('.menu-btn');
+        const btn  = document.querySelector('.menu-btn');
         const menu = document.getElementById('mobileMenu');
         const srcNav = document.querySelector('header .nav');
-
         if (!btn || !menu || !srcNav) return;
+
+        function openMenu() {
+          syncMobileMenu();
+          btn.setAttribute('aria-expanded', 'true');
+          menu.hidden = false;
+          menu.removeAttribute('inert');
+        }
+        function closeMenu() {
+          btn.setAttribute('aria-expanded', 'false');
+          menu.hidden = true;
+          menu.setAttribute('inert', '');
+        }
+        function isOpen() {
+          return btn.getAttribute('aria-expanded') === 'true';
+        }
 
         // Clone the current links from the desktop nav into the mobile menu
         function syncMobileMenu() {
           menu.innerHTML = '';
           srcNav.querySelectorAll('a').forEach(a => {
             const clone = a.cloneNode(true);
+            clone.setAttribute('role', 'menuitem');
             menu.appendChild(clone);
           });
         }
 
         // Keep mobile menu in sync when app.js injects/removes nav items (e.g., Logout)
         const obs = new MutationObserver(() => {
-          if (!menu.hidden) syncMobileMenu();
+          if (isOpen()) syncMobileMenu();
         });
         obs.observe(srcNav, { childList: true, subtree: true });
 
-        // Toggle open/close
-        btn.addEventListener('click', () => {
-          const isOpen = btn.getAttribute('aria-expanded') === 'true';
-          if (isOpen) {
-            btn.setAttribute('aria-expanded', 'false');
-            menu.hidden = true;
-          } else {
-            syncMobileMenu();
-            btn.setAttribute('aria-expanded', 'true');
-            menu.hidden = false;
-          }
-        });
+        // Toggle open/close from button
+        btn.addEventListener('click', () => (isOpen() ? closeMenu() : openMenu()));
 
         // Close on link click (route change)
         menu.addEventListener('click', (e) => {
           const a = e.target.closest('a[href^="#/"]');
           if (!a) return;
-          btn.setAttribute('aria-expanded', 'false');
-          menu.hidden = true;
+          closeMenu();
         });
 
         // Close when hash changes (navigated programmatically)
-        window.addEventListener('hashchange', () => {
-          btn.setAttribute('aria-expanded', 'false');
-          menu.hidden = true;
-        });
+        window.addEventListener('hashchange', closeMenu);
 
         // Close if viewport gets large again
         window.addEventListener('resize', () => {
-          if (window.innerWidth > 720) {
-            btn.setAttribute('aria-expanded', 'false');
-            menu.hidden = true;
-          }
+          if (window.innerWidth > 720) closeMenu();
         });
 
-        // Click outside to close
-        document.addEventListener('click', (e) => {
+        // Close on Escape
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape' && isOpen()) closeMenu();
+        });
+
+        // Close on outside tap/click (use pointerdown for mobile reliability)
+        document.addEventListener('pointerdown', (e) => {
           if (menu.hidden) return;
-          const inside = e.target === menu || menu.contains(e.target) || e.target === btn;
-          if (!inside) {
-            btn.setAttribute('aria-expanded', 'false');
-            menu.hidden = true;
-          }
+          const insideMenu = menu.contains(e.target);
+          const onButton   = btn.contains(e.target);
+          if (!insideMenu && !onButton) closeMenu();
         });
       })();
     </script>
