@@ -643,121 +643,7 @@ export async function Execute(root, campaignInput) {
     return frag;
   }
 
-  /* dom utilities */
-  function div(cls, ...args) {
-    const n = document.createElement('div');
-    if (cls) n.className = cls;
-    for (const a of args) {
-      if (a == null) continue;
-      if (typeof a === 'object' && !(a instanceof Node) && !Array.isArray(a)) {
-        Object.assign(n.style, a);
-      } else {
-        n.append(a instanceof Node ? a : document.createTextNode(String(a)));
-      }
-    }
-    return n;
-  }
-  function h1(t){ const n=document.createElement('div'); n.className='title'; n.textContent=t; return n; }
-  function h2(t,cls){ const n=document.createElement('div'); if (cls) n.className=cls; n.textContent=t; return n; }
-  function ptext(t,cls){ const n=document.createElement('div'); if (cls) n.className=cls; n.textContent=t; return n; }
-  function center(...kids){ const n=div('center'); kids.forEach(k=>k && n.append(k)); return n; }
-  function button(text, cls, on){
-    const b=document.createElement('button');
-    b.className=cls;
-    b.textContent=text;
-    b.onclick=on;
-    return b;
-  }
-  function actionRow(...kids){
-    const r=div('actions');
-    r.style.display = 'flex';
-    r.style.gap = '8px';
-    r.style.marginTop = '12px';
-    r.style.justifyContent = 'center';
-    kids.forEach(k=>k&&r.append(k));
-    return r;
-  }
-  function disabledBtn(text){
-    const b=document.createElement('button');
-    b.className='callBtn';
-    b.textContent=text;
-    b.disabled=true;
-    b.style.opacity=.6;
-    return b;
-  }
-  function chip(label, cls, on){
-    const c=document.createElement('button');
-    c.className=cls;
-    c.textContent=label;
-    c.onclick=on;
-    return c;
-  }
-  function chipRow(arr){ const r=div('surveyChips'); arr.forEach(x=>r.append(x)); return r; }
-  function cardKV(entries){
-    const card = div('detailsCard'); card.style.width='90%';
-    for (const [k,v] of entries){
-      const row = div('kv');
-      row.append(div('k', k), div('v', String(v)));
-      card.append(row);
-    }
-    return card;
-  }
-
-  function errorBox(err){
-    const pre = document.createElement('pre');
-    pre.style.whiteSpace='pre-wrap';
-    pre.style.background='#1a1f2b';
-    pre.style.border='1px solid #2b3b5f';
-    pre.style.padding='12px';
-    pre.style.borderRadius='8px';
-    pre.textContent = (err && (err.stack || err.message)) || String(err);
-    const box = div('', { padding:'16px', color:'#ffb3b3' });
-    box.append(h2('⚠️ Execution screen error'), pre);
-    return box;
-  }
-  function showError(err){
-    root.innerHTML = '';
-    root.append(errorBox(err));
-  }
-}
-
-/* ---------- merge helper: reconciles local + remote ---------- */
-function mergeProgress(local, remote) {
-  const L = local  && typeof local  === 'object' ? local  : { campaignId: remote?.campaignId, totals:{total:0,made:0,answered:0,missed:0}, contacts:{} };
-  const R = remote && typeof remote === 'object' ? remote : { campaignId: L.campaignId, totals:{total:0,made:0,answered:0,missed:0}, contacts:{} };
-
-  const out = { campaignId: L.campaignId || R.campaignId, totals: { ...L.totals }, contacts: { ...L.contacts } };
-
-  for (const [id, rc] of Object.entries(R.contacts || {})) {
-    const lc = out.contacts[id] || {};
-    const attempts = Math.max(Number(lc.attempts||0), Number(rc.attempts||0));
-    const lastCalledAt = Math.max(Number(lc.lastCalledAt||0), Number(rc.lastCalledAt||0)) || 0;
-    const outcome = rc.outcome ?? lc.outcome;
-
-    const lLogs = Array.isArray(lc.surveyLogs) ? lc.surveyLogs : [];
-    const rLogs = Array.isArray(rc.surveyLogs) ? rc.surveyLogs : [];
-    const mergedLogs = [...lLogs, ...rLogs].sort((a,b)=>(a?.at||0)-(b?.at||0));
-    const surveyAnswer = mergedLogs.length ? mergedLogs[mergedLogs.length-1].answer : (rc.surveyAnswer ?? lc.surveyAnswer);
-
-    const lNoteAt = (lc.notesLogs && lc.notesLogs[lc.notesLogs.length-1]?.at) || 0;
-    const rNoteAt = (rc.notesLogs && rc.notesLogs[rc.notesLogs.length-1]?.at) || 0;
-    const useR = rNoteAt >= lNoteAt;
-    const notes = useR ? (rc.notes ?? lc.notes) : (lc.notes ?? rc.notes);
-    const notesLogs = [...(lc.notesLogs||[]), ...(rc.notesLogs||[])].sort((a,b)=>(a?.at||0)-(b?.at||0)).slice(-10);
-
-    out.contacts[id] = { attempts, lastCalledAt, outcome, surveyAnswer, surveyLogs: mergedLogs, notes, notesLogs };
-  }
-
-  const seen = Object.values(out.contacts);
-  out.totals.made = seen.reduce((n,c)=>n + (c.attempts>0?1:0), 0);
-  out.totals.answered = seen.reduce((n,c)=>n + (c.outcome==='answered'?1:0), 0);
-  out.totals.missed = seen.reduce((n,c)=>n + (c.outcome==='no_answer'?1:0), 0);
-  out.totals.total = L.totals?.total ?? R.totals?.total ?? 0;
-
-  return out;
-}
-
-/* ======================= Follow Up panel (no new Supabase calls) ======================= */
+  /* ======================= Follow Up panel (no new Supabase calls) ======================= */
 function buildFollowUpPanel(progressSnapshot, idToStudent) {
   const container = div('', { maxWidth: '950px', margin: '16px auto 32px', width: '100%' });
 
@@ -933,3 +819,118 @@ function followUpCsv(rows) {
   return head + '\n' + body;
 }
 /* ===================== end Follow Up panel helpers ===================== */
+
+  /* dom utilities */
+  function div(cls, ...args) {
+    const n = document.createElement('div');
+    if (cls) n.className = cls;
+    for (const a of args) {
+      if (a == null) continue;
+      if (typeof a === 'object' && !(a instanceof Node) && !Array.isArray(a)) {
+        Object.assign(n.style, a);
+      } else {
+        n.append(a instanceof Node ? a : document.createTextNode(String(a)));
+      }
+    }
+    return n;
+  }
+  function h1(t){ const n=document.createElement('div'); n.className='title'; n.textContent=t; return n; }
+  function h2(t,cls){ const n=document.createElement('div'); if (cls) n.className=cls; n.textContent=t; return n; }
+  function ptext(t,cls){ const n=document.createElement('div'); if (cls) n.className=cls; n.textContent=t; return n; }
+  function center(...kids){ const n=div('center'); kids.forEach(k=>k && n.append(k)); return n; }
+  function button(text, cls, on){
+    const b=document.createElement('button');
+    b.className=cls;
+    b.textContent=text;
+    b.onclick=on;
+    return b;
+  }
+  function actionRow(...kids){
+    const r=div('actions');
+    r.style.display = 'flex';
+    r.style.gap = '8px';
+    r.style.marginTop = '12px';
+    r.style.justifyContent = 'center';
+    kids.forEach(k=>k&&r.append(k));
+    return r;
+  }
+  function disabledBtn(text){
+    const b=document.createElement('button');
+    b.className='callBtn';
+    b.textContent=text;
+    b.disabled=true;
+    b.style.opacity=.6;
+    return b;
+  }
+  function chip(label, cls, on){
+    const c=document.createElement('button');
+    c.className=cls;
+    c.textContent=label;
+    c.onclick=on;
+    return c;
+  }
+  function chipRow(arr){ const r=div('surveyChips'); arr.forEach(x=>r.append(x)); return r; }
+  function cardKV(entries){
+    const card = div('detailsCard'); card.style.width='90%';
+    for (const [k,v] of entries){
+      const row = div('kv');
+      row.append(div('k', k), div('v', String(v)));
+      card.append(row);
+    }
+    return card;
+  }
+
+  function errorBox(err){
+    const pre = document.createElement('pre');
+    pre.style.whiteSpace='pre-wrap';
+    pre.style.background='#1a1f2b';
+    pre.style.border='1px solid #2b3b5f';
+    pre.style.padding='12px';
+    pre.style.borderRadius='8px';
+    pre.textContent = (err && (err.stack || err.message)) || String(err);
+    const box = div('', { padding:'16px', color:'#ffb3b3' });
+    box.append(h2('⚠️ Execution screen error'), pre);
+    return box;
+  }
+  function showError(err){
+    root.innerHTML = '';
+    root.append(errorBox(err));
+  }
+}
+
+/* ---------- merge helper: reconciles local + remote ---------- */
+function mergeProgress(local, remote) {
+  const L = local  && typeof local  === 'object' ? local  : { campaignId: remote?.campaignId, totals:{total:0,made:0,answered:0,missed:0}, contacts:{} };
+  const R = remote && typeof remote === 'object' ? remote : { campaignId: L.campaignId, totals:{total:0,made:0,answered:0,missed:0}, contacts:{} };
+
+  const out = { campaignId: L.campaignId || R.campaignId, totals: { ...L.totals }, contacts: { ...L.contacts } };
+
+  for (const [id, rc] of Object.entries(R.contacts || {})) {
+    const lc = out.contacts[id] || {};
+    const attempts = Math.max(Number(lc.attempts||0), Number(rc.attempts||0));
+    const lastCalledAt = Math.max(Number(lc.lastCalledAt||0), Number(rc.lastCalledAt||0)) || 0;
+    const outcome = rc.outcome ?? lc.outcome;
+
+    const lLogs = Array.isArray(lc.surveyLogs) ? lc.surveyLogs : [];
+    const rLogs = Array.isArray(rc.surveyLogs) ? rc.surveyLogs : [];
+    const mergedLogs = [...lLogs, ...rLogs].sort((a,b)=>(a?.at||0)-(b?.at||0));
+    const surveyAnswer = mergedLogs.length ? mergedLogs[mergedLogs.length-1].answer : (rc.surveyAnswer ?? lc.surveyAnswer);
+
+    const lNoteAt = (lc.notesLogs && lc.notesLogs[lc.notesLogs.length-1]?.at) || 0;
+    const rNoteAt = (rc.notesLogs && rc.notesLogs[rc.notesLogs.length-1]?.at) || 0;
+    const useR = rNoteAt >= lNoteAt;
+    const notes = useR ? (rc.notes ?? lc.notes) : (lc.notes ?? rc.notes);
+    const notesLogs = [...(lc.notesLogs||[]), ...(rc.notesLogs||[])].sort((a,b)=>(a?.at||0)-(b?.at||0)).slice(-10);
+
+    out.contacts[id] = { attempts, lastCalledAt, outcome, surveyAnswer, surveyLogs: mergedLogs, notes, notesLogs };
+  }
+
+  const seen = Object.values(out.contacts);
+  out.totals.made = seen.reduce((n,c)=>n + (c.attempts>0?1:0), 0);
+  out.totals.answered = seen.reduce((n,c)=>n + (c.outcome==='answered'?1:0), 0);
+  out.totals.missed = seen.reduce((n,c)=>n + (c.outcome==='no_answer'?1:0), 0);
+  out.totals.total = L.totals?.total ?? R.totals?.total ?? 0;
+
+  return out;
+}
+
