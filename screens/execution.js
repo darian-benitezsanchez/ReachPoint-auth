@@ -680,45 +680,47 @@ function buildFollowUpPanel(progressSnapshot, idToStudent, campaign) {
   const resultInfo = ptext('', 'muted');
 
   const createBtn = button('Create Follow-Up Campaign', 'btn btn-primary', async () => {
-      const rows = computeMatches();
-      if (!rows.length) {
-        alert('No matching contacts for follow-up.');
-        return;
-      }
+    const rows = computeMatches();
+    if (!rows.length) {
+      alert('No matching contacts for follow-up.');
+      return;
+    }
 
-      // Derive new campaign name
-      const originalName = campaign?.name || '(Unnamed Campaign)';
-      const newName = `[Follow Up] ${originalName}`;
+    const originalName = campaign?.name || '(Unnamed Campaign)';
+    const newName = `[Follow Up] ${originalName}`;
+    const student_ids = rows.map(r => String(r.id));
 
-      // Extract just the student IDs
-      const student_ids = rows.map(r => String(r.id));
+    try {
+      // Build a lean payload that won't reference non-existent columns.
+      const payload = {
+        name: newName,
+        student_ids,                      // jsonb/array column (must exist)
+        // If your table *does* have a `filters` jsonb column, keep the next line;
+        // if it doesn't, comment it out:
+        filters: [
+          { field: 'outcome', op: '=', value: outcomeSel.value || 'any' },
+          { field: 'surveyAnswer', op: 'contains', value: surveyInp.value || '' }
+        ],
+        // created_at: new Date().toISOString(), // only if you don't have a DEFAULT on created_at
+      };
 
-      try {
-        // Insert into Supabase (same table as campaigns)
-        const { data, error } = await window.supabase
-          .from('campaigns')
-          .insert({
-            name: newName,
-            created_at: new Date().toISOString(),
-            student_ids,
-            filters: [
-              { field: 'outcome', op: '=', value: outcomeSel.value || 'any' },
-              { field: 'surveyAnswer', op: 'contains', value: surveyInp.value || '' }
-            ],
-            source_campaign_id: campaign.id
-          })
-          .select()
-          .single();
+      const { data, error } = await window.supabase
+        .from('campaigns')
+        .insert(payload)
+        .select()
+        .single();
 
-        if (error) throw error;
+      if (error) throw error;
 
-        alert(`✅ Created new follow-up campaign:\n${data.name}`);
-        location.hash = `#/execute/${data.id}`; // jump straight into new campaign
-      } catch (err) {
-        console.error('[FollowUp] failed to create campaign', err);
-        alert('❌ Could not create follow-up campaign. Check console for details.');
-      }
-    });
+      alert(`✅ Created new follow-up campaign:\n${data.name}`);
+      // Navigate to it
+      location.hash = `#/execute/${data.id}`;
+    } catch (err) {
+      console.error('[FollowUp] failed to create campaign', err);
+      alert('❌ Could not create follow-up campaign. Check console for details.');
+    }
+  });
+
 
 
   controls.append(outcomeSel, surveyInp, createBtn);
