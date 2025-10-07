@@ -7,6 +7,63 @@ export async function Call(root) {
   root.innerHTML = '';
   const wrap = div('');
 
+  // --- inject compact table-card styles for recent calls (once per mount) ---
+  (function injectStyles(){
+    const id = 'rp-call-cards-css';
+    if (document.getElementById(id)) return;
+    const css = document.createElement('style');
+    css.id = id;
+    css.textContent = `
+    /* Table-like header */
+    .callsTableHead{
+      display:grid; grid-template-columns: 2fr 1fr 1fr;
+      gap:12px; align-items:center; font-weight:800; color:#0f172a;
+      padding:10px 12px; border:1px solid #cbd5e1; border-radius:12px;
+      background:#f8fafc; margin:6px 0 8px;
+    }
+
+    /* Card that expands */
+    .callCard{
+      border:1px solid #e2e8f0; border-radius:14px; background:#ffffff;
+      overflow:hidden; margin:8px 0; box-shadow:0 1px 0 rgba(15,23,42,0.03);
+    }
+    .callCard summary{
+      list-style:none; cursor:pointer; display:block; outline:none;
+    }
+    .callCard summary::-webkit-details-marker{ display:none; }
+
+    /* Summary row looks like a table row */
+    .callCardSummary{
+      display:grid; grid-template-columns: 2fr 1fr 1fr 24px;
+      gap:12px; align-items:center; padding:12px;
+      border-bottom:1px solid #eef2f7; background:#fafcff;
+    }
+    .callCardSummary .name{ font-weight:700; color:#0f172a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .callCardSummary .caller{ color:#334155; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .callCardSummary .when{ color:#475569; font-size:12px; }
+    .callCardSummary .chev{ justify-self:end; color:#475569; }
+
+    .callCardBody{
+      padding:12px; background:#ffffff;
+      display:grid; grid-template-columns: 1fr; gap:10px;
+    }
+    .callMeta{
+      display:grid; grid-template-columns: 160px 1fr; gap:10px; align-items:start;
+    }
+    .callMeta .k{ color:#64748b; font-size:12px; }
+    .callMeta .v{ color:#0f172a; }
+
+    .noteBox{
+      border:1px solid #e5e7eb; background:#f9fafb; border-radius:10px; padding:10px; white-space:pre-wrap;
+      color:#0f172a; font-size:14px;
+    }
+
+    .recentWrap{ margin-top:16px; }
+    .recentTitle{ font-weight:900; margin:4px 0 8px; color:#0f172a; }
+    `;
+    document.head.appendChild(css);
+  })();
+
   // --- connection status chip ---
   const supaClient = supa();
   const statusChip = connChip(supaClient ? 'Connected to Database' : 'Offline mode (local save)', !!supaClient);
@@ -257,6 +314,7 @@ export async function Call(root) {
     return data || [];
   }
 
+  // 🆕 Table-like, expandable card rendering
   async function refreshRecentCalls() {
     recentListMount.innerHTML = '';
     const calls = await loadRecentCalls();
@@ -266,16 +324,35 @@ export async function Call(root) {
       return;
     }
 
+    // Header row (table feel)
+    const head = div('callsTableHead');
+    head.append(div('', 'Student'), div('', 'Caller'), div('', 'Time'));
+    recentListMount.append(head);
+
     for (const c of calls) {
-      const row = div('callRow');
       const when = c.occurred_at ? new Date(c.occurred_at).toLocaleString() : '';
-      row.append(
-        div('callCell', c.full_name || ''),
-        div('callCell', `📞 ${c.caller || ''}`),
-        div('callCell', when),
-        div('callCell notes', c.notes || '')
-      );
-      recentListMount.append(row);
+      const card = document.createElement('details');
+      card.className = 'callCard';
+
+      const sum = document.createElement('summary');
+      sum.className = 'callCardSummary';
+
+      const name = div('name', c.full_name || '');
+      const who  = div('caller', c.caller || '');
+      const time = div('when', when);
+      const chev = div('chev', '▾');
+
+      sum.append(name, who, time, chev);
+
+      const body = div('callCardBody');
+      const row1 = div('callMeta', div('k','Student'), div('v', c.full_name || ''));
+      const row2 = div('callMeta', div('k','Caller'),  div('v', c.caller || ''));
+      const row3 = div('callMeta', div('k','Occurred'),div('v', when || ''));
+      const notes = div('noteBox', c.notes || 'No notes recorded.');
+      body.append(row1, row2, row3, notes);
+
+      card.append(sum, body);
+      recentListMount.append(card);
     }
   }
 

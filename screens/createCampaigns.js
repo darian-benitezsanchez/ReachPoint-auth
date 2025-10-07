@@ -48,7 +48,7 @@ export function CreateCampaign(root) {
         h1('Create Campaign'),
         label('Campaign name'),
         input({ placeholder: 'Fall Outreach Week 1', oninput: e => (name = e.target.value) }),
-        div('sectionTitle', 'Filters'),
+        div('sectionTitle', 'Contact Filters'),
         row(
           select(fields.length ? fields : ['(loading…)'], field, v => {
             field = v;
